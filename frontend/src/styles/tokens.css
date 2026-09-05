@@ -1,0 +1,130 @@
+/* ── Precision Instrument, version 2 ─────────────────────────────────────
+   Tokens. The design system in ../../../design direction/DESIGN.md, revised
+   after the version-1 critique:
+
+     · three colour families that must never be confused
+         accent            INTERACTIVE only
+         pass/watch/halt   INSTRUMENT STATE only, never clickable
+         clean/shoulder/onhump  DATA CLASSIFICATION only, never state
+       In version 1 pass == clean and watch == shoulder by hex value. Here the
+       peak categories sit on their own hues (teal / amber / violet) so the
+       rule survives a refactor, and each still carries its shape.
+     · --rule is the CONTROL stroke and clears 3:1 on white (WCAG 1.4.11).
+       --rule-soft is the decorative divider and stays light.
+     · the theme is prefers-color-scheme by default, and a per-browser
+       data-theme stamp wins in either direction (the version-1 critique asked
+       for a manual override on shared lab PCs). Never define a colour only
+       inside the media query - it would not apply in the unstamped state.
+
+   Fonts are vendored, never fetched: the lab PC may have no internet.
+   ────────────────────────────────────────────────────────────────────────── */
+@font-face{
+  font-family:'Hanken Grotesk';
+  src:url('../fonts/hankengrotesk-var.woff2') format('woff2-variations');
+  font-weight:400 700;font-style:normal;font-display:swap;
+  size-adjust:100%;ascent-override:95%;descent-override:25%;
+}
+@font-face{
+  font-family:'JetBrains Mono';
+  src:url('../fonts/jetbrainsmono-var.woff2') format('woff2-variations');
+  font-weight:500 700;font-style:normal;font-display:swap;
+}
+
+:root{
+  /* ── ground ── */
+  --paper:#F6F8F6;
+  --surface:#FFFFFF;
+  --surface-2:#F0F3F0;
+  --chrome:#EDF8F1;
+  --container-low:#E8F4EC;
+  --container:#E1F0E6;
+  --container-high:#D9E9DF;
+  --container-highest:#CFE0D5;
+  /* ── ink ── */
+  --ink:#10201A;
+  --ink-soft:#4F5F57;
+  --ink-faint:#66736C;
+  /* ── rules ── */
+  --rule:#8FA098;           /* control strokes: 3.0:1 on white */
+  --rule-soft:#DCE3DB;      /* dividers */
+  --grid:#E6ECE6;           /* chart gridlines */
+  --axis:#9AA69F;           /* chart axis lines */
+  /* ── accent — INTERACTIVE ONLY ── */
+  --accent:#005444;
+  --accent-ink:#005444;
+  --accent-tint:#066B58;
+  --accent-soft:#E2F2E7;
+  --on-accent:#FFFFFF;
+  /* ── semantic — INSTRUMENT STATE ONLY ── */
+  --pass:#2D7A50;
+  --watch:#AF511E;
+  --halt:#A32F27;
+  --pass-soft:#E4F3E9;
+  --watch-soft:#FBF0E8;
+  --halt-soft:#FFDAD6;
+  --neutral-soft:#EEF1EE;
+  /* ── peak category — DATA ONLY; each also carries a shape ── */
+  --clean:#0F766E;          /* circle */
+  --shoulder:#92600D;       /* triangle */
+  --onhump:#5B3A91;         /* square */
+  --humpfill:#B27A2A;
+  /* ── data series — DATA ONLY ── */
+  --series:#0E6E5B;
+  --series-2:#5B3A91;
+  --series-3:#7C8D84;
+  /* ── elevation ── */
+  --sh-raised:0 6px 20px rgba(16,32,26,.05);
+  --sh-float:0 10px 28px rgba(16,32,26,.10);
+  --sh-modal:0 14px 36px rgba(16,32,26,.14);
+  --led:0 0 4px;
+  /* ── shape ── */
+  --r-sm:4px;--r-md:8px;--r-lg:12px;--r-xl:16px;--r-full:9999px;
+  /* ── spacing: 8px base ── */
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:20px;--s6:24px;--s8:32px;--s10:40px;
+  --rail:1220px;--page-x:24px;
+  /* ── type ── */
+  --f-ui:'Hanken Grotesk',ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --f-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  /* ── motion ── */
+  --ease-out:cubic-bezier(.23,1,.32,1);
+  --ease-in-out:cubic-bezier(.77,0,.175,1);
+  --dur-press:160ms;--dur-tooltip:125ms;--dur-tab:250ms;
+  --dur-panel:300ms;--dur-meter:800ms;--dur-trace:700ms;
+  color-scheme:light;
+}
+
+/* ── dark: a second composition, not an inversion ─────────────────────── */
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#0C1411;--surface:#151F1A;--surface-2:#1A2620;--chrome:#111C16;
+  --container-low:#1A2620;--container:#1F2C25;--container-high:#25332B;
+  --container-highest:#2C3B33;
+  --ink:#E6F3EA;--ink-soft:#A9BCB1;--ink-faint:#86978D;
+  --rule:#5C6F66;--rule-soft:#243129;--grid:#22302A;--axis:#4C5E55;
+  --accent:#84D6BF;--accent-ink:#9BEDD5;--accent-tint:#A0F2DA;--accent-soft:#12352C;
+  --on-accent:#00201A;
+  --pass:#6CDABB;--watch:#E39A63;--halt:#FFB4AB;
+  --pass-soft:#12352C;--watch-soft:#2C1E14;--halt-soft:#2E1512;--neutral-soft:#1A2620;
+  --clean:#5ED3C7;--shoulder:#E5B45B;--onhump:#C9AEFF;--humpfill:#E5B45B;
+  --series:#84D6BF;--series-2:#C9AEFF;--series-3:#7C8D84;
+  --sh-raised:0 6px 20px rgba(0,0,0,.36);
+  --sh-float:0 10px 28px rgba(0,0,0,.5);
+  --sh-modal:0 14px 36px rgba(0,0,0,.6);
+  color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --paper:#0C1411;--surface:#151F1A;--surface-2:#1A2620;--chrome:#111C16;
+  --container-low:#1A2620;--container:#1F2C25;--container-high:#25332B;
+  --container-highest:#2C3B33;
+  --ink:#E6F3EA;--ink-soft:#A9BCB1;--ink-faint:#86978D;
+  --rule:#5C6F66;--rule-soft:#243129;--grid:#22302A;--axis:#4C5E55;
+  --accent:#84D6BF;--accent-ink:#9BEDD5;--accent-tint:#A0F2DA;--accent-soft:#12352C;
+  --on-accent:#00201A;
+  --pass:#6CDABB;--watch:#E39A63;--halt:#FFB4AB;
+  --pass-soft:#12352C;--watch-soft:#2C1E14;--halt-soft:#2E1512;--neutral-soft:#1A2620;
+  --clean:#5ED3C7;--shoulder:#E5B45B;--onhump:#C9AEFF;--humpfill:#E5B45B;
+  --series:#84D6BF;--series-2:#C9AEFF;--series-3:#7C8D84;
+  --sh-raised:0 6px 20px rgba(0,0,0,.36);
+  --sh-float:0 10px 28px rgba(0,0,0,.5);
+  --sh-modal:0 14px 36px rgba(0,0,0,.6);
+  color-scheme:dark;
+}

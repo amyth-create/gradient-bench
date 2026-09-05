@@ -1,0 +1,111 @@
+{
+  "_about": "Golden-file expectations for hplc_picker. Adjudicated by Amyth against the rendered chromatograms. These are the numbers the phase-0 test suite holds the picker to. Do not edit without re-adjudicating the trace.",
+  "picker_version": "3.0.0",
+  "adjudicated_by": "Amyth",
+  "trace_dir": "4d/exp result/4d exp output",
+  "baseline_config": {
+    "snr": 5.0,
+    "arpls_lam": 100000.0,
+    "hump_min_floor_ratio": 0.95,
+    "hump_min_span_abs": 1.0,
+    "detection": "hybrid_fit"
+  },
+  "settled": {
+    "method2": {
+      "n_clean_peaks": 3,
+      "hump_spans": [
+        [
+          6.74,
+          13.85
+        ]
+      ],
+      "hump_time_fraction": 0.1424,
+      "crf": 2.206,
+      "config": {
+        "hump_override": [
+          [
+            6.74,
+            13.85
+          ]
+        ]
+      },
+      "note": "Amyth: hump is a product of baseline correction. Confirmed: arPLS lam=1e5 fits 99.9-127.7 inside the span against 43-101 outside, so the fitter absorbs part of the hump and starves the floor-ratio gate. Stiffening lam does NOT recover it (see rejected_options). Manual override is the only route.",
+      "verdict": "record was wrong (3 peaks stands, hump span corrected 5.47 -> 7.11 min)"
+    },
+    "method4": {
+      "n_clean_peaks": 13,
+      "hump_spans": [],
+      "hump_time_fraction": 0.0,
+      "crf": 13.0,
+      "config": {},
+      "note": "56.8 pts/min. Picker 3.0.0 was already correct; the recorded 14 was wrong.",
+      "verdict": "picker correct, record wrong"
+    },
+    "method7": {
+      "n_clean_peaks": 1,
+      "hump_spans": [],
+      "hump_time_fraction": 0.0,
+      "crf": 1.0,
+      "config": {},
+      "note": "Shortest run in the set (4.75 min). Picker 3.0.0 was already correct; the recorded 2 was wrong.",
+      "verdict": "picker correct, record wrong"
+    },
+    "method12": {
+      "n_clean_peaks": 7,
+      "hump_spans": [
+        [
+          19.25,
+          22.39
+        ]
+      ],
+      "hump_time_fraction": 0.129,
+      "crf": 5.31,
+      "config": {
+        "hump_override": [
+          [
+            19.25,
+            22.39
+          ]
+        ]
+      },
+      "note": "41.9 pts/min. Amyth's span puts picks 8, 9 and 10 (20.06, 21.01, 21.68) on-hump, leaving 7 clean - exactly his call. Pick 9 has FWHM 1.103 min against 0.10-0.27 for its neighbours, the signature of sitting on a raised floor.",
+      "verdict": "record right on peaks, span widened 19.70-22.09 -> 19.25-22.39"
+    },
+    "method9": {
+      "n_clean_peaks": 13,
+      "hump_spans": [],
+      "hump_time_fraction": 0.0,
+      "crf": 13.0,
+      "config": {
+        "snr": 2.5
+      },
+      "note": "Amyth confirms 13 peaks including the early bump at RT 3.614 min (height 0.54). The four late peaks are 17.064, 18.548, 19.914, 21.048. Needs snr=2.5; the sweep goes 8 (snr 5.0-4.0) -> 9 (3.5) -> 11 (3.0) -> 13 (2.5, stable to 1.5) -> 17 (1.2).",
+      "verdict": "neither was right - record said 10, default picker said 8, truth is 13"
+    }
+  },
+  "rejected_options": {
+    "stiffer_arpls_lam": "Tested 1e6-1e9 on method2 to recover the hump automatically. It never finds a hump at any lam; it only finds more peaks (5 -> 7 -> 8). And lam=1e7 breaks 2 of the 15 already-agreeing traces (method1 6 -> 0, method16 6 -> 5). Default stays at 1e5."
+  },
+  "agree_at_defaults": [
+    "method1",
+    "method3",
+    "method5",
+    "method6",
+    "method8",
+    "method10",
+    "method11",
+    "method13",
+    "method14",
+    "method15",
+    "method16",
+    "method17",
+    "method18",
+    "method19",
+    "method20"
+  ],
+  "campaign_default_snr": {
+    "value": 5.0,
+    "evidence": "Tested every trace against its agreed peak count at snr 5.0 / 4.0 / 3.0 / 2.5 / 2.0. snr=5.0 gets 19/20 (only method9 wrong). snr=4.0 gets 11/20, snr=3.0 gets 5/20, snr=2.5 gets 5/20, snr=2.0 gets 4/20. Lowering the default to rescue method9 would break 15 traces. method9 is a per-run tune, not a default change - which is the sanctioned workflow: the default is right nearly always, the analyst corrects the exceptions."
+  },
+  "status": "complete - 20/20 traces reproduce their adjudicated peak count"
+}

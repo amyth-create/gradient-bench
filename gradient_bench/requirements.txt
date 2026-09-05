@@ -1,0 +1,16 @@
+# Pinned on purpose. BoTorch's DEFAULT kernel and priors have changed between
+# releases - 0.18 uses a bare ARD RBFKernel with a dimension-scaled LogNormal
+# lengthscale prior and no outputscale, where older versions used
+# ScaleKernel(Matern-5/2) with Gamma priors. A campaign fitted under one and
+# re-fitted under the other is not the same campaign, so the version is pinned
+# here and recorded in every campaign's Config sheet.
+numpy>=1.24
+scipy>=1.10
+pandas>=2.0
+openpyxl>=3.1
+pybaselines>=1.1
+torch>=2.0
+botorch>=0.18,<0.19
+gpytorch>=1.15
+matplotlib>=3.6
+pytest>=7.0
