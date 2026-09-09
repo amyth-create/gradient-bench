@@ -13,4 +13,9 @@ torch>=2.0
 botorch>=0.18,<0.19
 gpytorch>=1.15
 matplotlib>=3.6
+
+# The web layer. Not pinned tightly: the app uses only routing, JSON and
+# send_from_directory, none of which have moved across Flask 2 and 3.
+flask>=2.2
+
 pytest>=7.0

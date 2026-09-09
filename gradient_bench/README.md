@@ -10,7 +10,7 @@ from proposal to record).
 ## Run the app
 
 ```bash
-pip install -r gradient_bench/requirements.txt flask
+pip install -r gradient_bench/requirements.txt
 python -m gradient_bench.api.app                 # then open http://127.0.0.1:5051
 python -m gradient_bench.api.app --open /path/to/campaign   # skip the picker
 ```

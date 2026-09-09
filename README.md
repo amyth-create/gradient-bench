@@ -65,7 +65,7 @@ git clone https://github.com/amyth-create/gradient-bench.git
 cd gradient-bench
 python3 -m venv .venv
 source .venv/bin/activate                 # Windows: .venv\Scripts\activate
-pip install -r gradient_bench/requirements.txt flask
+pip install -r gradient_bench/requirements.txt
 ```
 
 `torch` and BoTorch are needed to **propose** a method, not to **record** one. Without them

@@ -231,7 +231,7 @@ CHECKS: list[Check] = [
           "download; without it the app still records runs and reads campaigns, "
           "but cannot propose)", _torch_stack),
     Check("web server", "flask, which serves the interface",
-          "pip install flask", _flask),
+          "pip install -r gradient_bench/requirements.txt", _flask),
     Check("peak picker", "the vendored picker, and that nothing else shadows it",
           "check that gradient_bench/core/hplc_picker.py is present and that no "
           "other hplc_picker.py is earlier on sys.path", _picker),
