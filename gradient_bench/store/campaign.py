@@ -172,7 +172,7 @@ class Campaign:
         """The acquisition function this campaign proposes with.
 
         Chosen once, at creation, and locked - the same reasoning as the
-        kernel. Folders written by version 1 carry a descriptive string here
+        kernel. Folders written by earlier builds carry a descriptive string here
         ("qLogNoisyExpectedImprovement (prune_baseline=True)") rather than a
         key; they were all proposed with qLogNEI, so that is what they read as.
         """

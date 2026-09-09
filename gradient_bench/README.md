@@ -1,14 +1,17 @@
-# gradient_bench - phases 0 and 1
+# gradient_bench — the package
 
-Phase 0 is the science layer, extracted from `03b_bayesian_optimisation_4param.ipynb`
-and `hplc_picker.py` into a library an API can call. Phase 1 is the loop on top of
-it: a Flask API, a React page, and one working cycle from proposal to record.
+Developer notes on the package itself. For what the app is, how to install it and
+how to use it, see the [README at the repository root](../README.md).
+
+Two layers: the science (the 4-parameter optimiser and the peak picker, as a library
+an API can call) and the loop on top of it (a Flask API, a React page, and the cycle
+from proposal to record).
 
 ## Run the app
 
 ```bash
 pip install -r gradient_bench/requirements.txt flask
-python -m gradient_bench.api.app                 # then open http://127.0.0.1:5000
+python -m gradient_bench.api.app                 # then open http://127.0.0.1:5051
 python -m gradient_bench.api.app --open /path/to/campaign   # skip the picker
 ```
 
@@ -17,7 +20,7 @@ Node to *run* it. To change the interface:
 
 ```bash
 cd frontend && npm install && npm run build      # builds straight into api/static
-npm run dev                                      # or dev server, proxying /api to :5000
+npm run dev                                      # or dev server, proxying /api to :5051
 ```
 
 Everything is bundled - no CDN, no web fonts - because the lab PC may have no
@@ -44,7 +47,7 @@ internet.
 ## Run it
 
 ```bash
-python -m pytest gradient_bench/tests/test_core.py -q      # 52 tests
+python -m pytest gradient_bench/tests -q                    # 130 tests
 python -m gradient_bench.scripts.replay_corpus             # the whole corpus, headless
 ```
 

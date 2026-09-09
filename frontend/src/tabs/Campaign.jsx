@@ -419,7 +419,7 @@ export default function Campaign({ onOpen, st }) {
       {migration && (
         <Banner kind="WATCH" eyebrow="older campaign" title="This campaign was written by an older build">
           <p>{migration.summary}</p>
-          <p className="muted mt2">Bringing it forward only adds — a missing column, a missing default, the marker file. No measured value is rewritten and nothing is deleted, and the workbook is backed up first. A version-1 campaign keeps the model it was created with: Matérn-5/2 and log noisy expected improvement.</p>
+          <p className="muted mt2">Bringing it forward only adds — a missing column, a missing default, the marker file. No measured value is rewritten and nothing is deleted, and the workbook is backed up first. A campaign from an earlier build keeps the model it was created with: Matérn-5/2 and log noisy expected improvement.</p>
           <div className="row actions">
             <button className="primary" onClick={() => run('migrating', () => post('/api/migrate', { path: migration.path })
               .then(() => post('/api/campaigns/open', { path: migration.path })).then(() => { setMigration(null); return onOpen() }))}>Bring it forward and open</button>

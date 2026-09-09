@@ -191,7 +191,7 @@ export const TERMS = {
        'earlier and later runs are not the same experiment.',
 }
 
-// ── version 2: the model choices made at creation ─────────────────────
+// ── the model choices made at creation ─────────────────────
 Object.assign(TERMS, {
   surrogate: 'The model that stands in for the instrument between runs: it predicts ' +
        'the score at any method it has not run, and how sure it is. Here it is a ' +

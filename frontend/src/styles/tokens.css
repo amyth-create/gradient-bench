@@ -1,18 +1,18 @@
-/* ── Precision Instrument, version 2 ─────────────────────────────────────
+/* ── Precision Instrument ─────────────────────────────────────
    Tokens. The design system in ../../../design direction/DESIGN.md, revised
-   after the version-1 critique:
+   after the design critique:
 
      · three colour families that must never be confused
          accent            INTERACTIVE only
          pass/watch/halt   INSTRUMENT STATE only, never clickable
          clean/shoulder/onhump  DATA CLASSIFICATION only, never state
-       In version 1 pass == clean and watch == shoulder by hex value. Here the
+       In the earlier build pass == clean and watch == shoulder by hex value. Here the
        peak categories sit on their own hues (teal / amber / violet) so the
        rule survives a refactor, and each still carries its shape.
      · --rule is the CONTROL stroke and clears 3:1 on white (WCAG 1.4.11).
        --rule-soft is the decorative divider and stays light.
      · the theme is prefers-color-scheme by default, and a per-browser
-       data-theme stamp wins in either direction (the version-1 critique asked
+       data-theme stamp wins in either direction (the design critique asked
        for a manual override on shared lab PCs). Never define a colour only
        inside the media query - it would not apply in the unstamped state.
 

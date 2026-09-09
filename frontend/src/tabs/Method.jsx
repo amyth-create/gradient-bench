@@ -18,7 +18,7 @@ export default function Method() {
   if (!d) return <main><h1>Method</h1><Skeleton rows={5} /></main>
   return (
     <main className="doc">
-      <div className="printmast"><Mark height={22} decorative />Gradient Bench · version 2 · {d.campaign?.name}</div>
+      <div className="printmast"><Mark height={22} decorative />Gradient Bench · version 1 · {d.campaign?.name}</div>
       <div className="pagehead noprint">
         <div><h1>Method</h1>
           <p className="sub mb0">Everything this campaign is doing and why, read from the running code and this campaign’s own workbook — not from a page someone maintains by hand. Generated {(d.generated_at || '').replace('T', ' ')}.</p></div>

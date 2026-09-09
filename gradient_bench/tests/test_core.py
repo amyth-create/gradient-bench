@@ -1417,7 +1417,7 @@ def test_every_glossary_key_used_in_the_app_exists():
     import re
     root = os.path.dirname(PKG)
     src = ""
-    # version 2 splits the interface into tabs/ and components/; every .jsx
+    # the interface is split into tabs/ and components/; every .jsx
     # under src/ is scanned so a term used in any of them is checked
     for dirpath, _, files in os.walk(os.path.join(root, "frontend", "src")):
         for name in files:
@@ -1549,7 +1549,7 @@ def test_recording_gates_on_feasibility(tmp_path, monkeypatch):
     assert c.n_injections() == 0                        # nothing was written
 
 
-# ── version 2: the surrogate and the acquisition are chosen, then locked ────
+# ── the surrogate and the acquisition are chosen, then locked ───────────────
 from gradient_bench.core import optimiser as O                # noqa: E402
 def test_every_surrogate_option_builds_the_kernel_it_claims():
     """The option list is what the analyst chooses from, so every entry must
@@ -1616,7 +1616,7 @@ def test_a_campaign_records_and_locks_its_optimiser_choice(tmp_path, monkeypatch
     cfg = c.config()
     assert cfg["acquisition"] == "ucb"
     assert cfg["acquisition_note"] == "qUpperConfidenceBound (ucb_beta=3.5)"
-    assert cfg["app_version"] == "2.0.0"
+    assert cfg["app_version"] == "1.0.0"
     s = c.summary()["optimiser"]
     assert s["acquisition_short"] == "UCB" and s["kernel_label"].startswith("Mat")
     # the choice travels with duplicated settings
@@ -1628,8 +1628,8 @@ def test_a_campaign_records_and_locks_its_optimiser_choice(tmp_path, monkeypatch
         _campaign(tmp_path, monkeypatch, acquisition="thompson")
 
 
-def test_a_version_one_campaign_reads_as_qlognei(tmp_path, monkeypatch):
-    """Version 1 wrote a descriptive string, not a key, into `acquisition`.
+def test_a_legacy_campaign_reads_as_qlognei(tmp_path, monkeypatch):
+    """Pre-release builds wrote a descriptive string, not a key, into `acquisition`.
     Every such campaign was proposed with qLogNEI."""
     from gradient_bench.store import sheet as SH
     c = _campaign(tmp_path, monkeypatch)

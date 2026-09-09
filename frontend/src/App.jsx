@@ -63,7 +63,7 @@ function Bar({ st, tab, setTab, theme, setTheme, defs, setDefs }) {
   return (
     <header className="appchrome">
       <div className="bar">
-        <span className="brand"><Mark decorative height={26} />Gradient Bench<span className="ver">v2</span></span>
+        <span className="brand"><Mark decorative height={26} />Gradient Bench<span className="ver">v1</span></span>
         {c && <>
           <span className="campaign" title={c.name}>{c.name}</span>
           <span className="stats">

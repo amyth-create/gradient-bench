@@ -17,7 +17,7 @@ function markOpened() {
 /**
  * A glossary term with its definition attached where it appears.
  *
- * Version-2 accessibility fixes from the critique:
+ * Accessibility fixes from the design critique:
  *   · the panel is referenced by aria-describedby from the trigger
  *   · Escape closes it
  *   · terms are NOT in the tab order by default (sixty focus stops before the

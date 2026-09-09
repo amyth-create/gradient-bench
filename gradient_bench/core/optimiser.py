@@ -395,7 +395,7 @@ def lengthscale_reading(name: str, v: float) -> str:
 #: reproduces BoTorch 0.18's own default; `default` passes no covar_module at
 #: all, which is whatever the installed version does.
 #:
-#: VERSION 2: the choice is made ONCE, at campaign creation, on the Campaign
+#: The choice is made ONCE, at campaign creation, on the Campaign
 #: tab, and it is locked afterwards. A campaign fitted under one kernel and
 #: refitted under another is not the same campaign, so there is no toggle.
 KERNELS = ("matern52", "matern32", "rbf", "default")

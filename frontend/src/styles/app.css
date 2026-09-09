@@ -1,4 +1,4 @@
-/* ── Precision Instrument, version 2 — components ─────────────────────────
+/* ── Precision Instrument — components ─────────────────────────
    Every colour resolves through a token in tokens.css. Type roles:
      display 34/40 700   h1
      title   26/32 600   step titles, panel titles
@@ -7,7 +7,7 @@
      small   13.5/20
      data    12/16 500 mono, tabular-nums
      label   10.5/14 700 mono caps — table headers, <dt>, eyebrows ONLY
-   The version-1 critique found the label-caps style doing six jobs; here it
+   The design critique found the label-caps style doing six jobs; here it
    does three, and every banner headline is sentence-case 15/600.
    ────────────────────────────────────────────────────────────────────────── */
 @import './tokens.css';
