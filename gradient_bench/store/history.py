@@ -135,7 +135,10 @@ def append(root: str, row: dict[str, Any]) -> str:
 
 #: Lengthscale columns follow the MODEL INPUT order, not the alphabet, so the
 #: ARD table reads in the order the four parameters are always written in.
-LS_ORDER = ["start_phi", "end_phi", "duration_min", "T", "run_order"]
+#: `shape` leads: it is the profile term of the shape-aware kernels, and a
+#: coordinate kernel simply never writes it.
+LS_ORDER = ["shape", "start_phi", "end_phi", "duration_min", "T",
+            "phi0", "dphi1", "dphi2", "dphi3", "dt1", "dt2", "dt3", "run_order"]
 
 
 def _columns_for(row: dict[str, Any]) -> list[str]:

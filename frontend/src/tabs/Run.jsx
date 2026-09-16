@@ -261,7 +261,7 @@ export default function Run({ st, reload, setTab }) {
           <>
             <p className="lead"><b>{instruction}</b></p>
             <div className="grid g48">
-              <GradientTable rows={p.gradient} T={p.u[3]} />
+              <GradientTable rows={p.gradient} T={p.T ?? p.u[p.u.length - 1]} />
               <div className="tiles">
                 <Tile label="repeat runs" term="replicate" value={p.n_replicates} note={p.n_replicates > 1 ? 'back to back, nothing changed between them' : 'a single injection'} />
                 {p.posterior_mean != null

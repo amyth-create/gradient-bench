@@ -138,8 +138,8 @@ def suggest(c: Campaign, seed: Optional[int] = None) -> ST.PendingRun:
                              reason=step.detail, n_replicates=1)
     elif step.action == "seed":
         idx = (step.seed_index or 1) - 1
-        seeds = S.initial_sample(c.n_seed(),
-                                 seed=int(c.config().get("seed_rng", 20260805)))
+        seeds = c.space().initial_sample(
+            c.n_seed(), seed=int(c.config().get("seed_rng", 20260805)))
         pend = ST.PendingRun(kind="design", u=[float(x) for x in seeds[idx]],
                              phase="cold_start", reason=step.detail,
                              seed_index=idx + 1, n_replicates=n_rep)
@@ -152,7 +152,8 @@ def suggest(c: Campaign, seed: Optional[int] = None) -> ST.PendingRun:
                              acquisition=c.acquisition(),
                              acq_params=c.acq_params(),
                              num_restarts=acq["num_restarts"],
-                             raw_samples=acq["raw_samples"])
+                             raw_samples=acq["raw_samples"],
+                             space=c.space())
         pend = ST.PendingRun(kind="design", u=[float(x) for x in sug.u],
                              phase="optimise", reason=sug.reason,
                              n_replicates=n_rep,
@@ -299,7 +300,7 @@ def record(c: Campaign, notes: str = "") -> dict[str, Any]:
             "Check the peaks before recording - step 3. The score comes from "
             "that check, so it has to happen before the run is written down.")
 
-    params = S.simple_gradient_abs(u)
+    params = S.for_vector(u).to_abs(u)
     df = c.data()
     ro0 = SH.next_run_order(df)
     is_ref = pend.kind == "reference"
@@ -317,7 +318,7 @@ def record(c: Campaign, notes: str = "") -> dict[str, Any]:
             c.workbook, method_name=name,
             source=SH.SOURCE_REFERENCE if is_ref else SH.SOURCE_DESIGN,
             replicate=rep, params_abs=params, row=row,
-            run_order=ro0 + rep - 1, notes=notes, model_dim=4,
+            run_order=ro0 + rep - 1, notes=notes, model_dim=c.space().d,
             trace_file=os.path.basename(path)))
 
     ST.clear(c.state_path)
@@ -381,11 +382,11 @@ def _record_uncertainty(c: Campaign, written: list) -> Optional[dict[str, Any]]:
         sd, _, _ = c.sigma_crf()
         step = UNC.uncertainty_step(
             U, y, sigma_crf=(sd if np.isfinite(sd) and sd > 0 else None),
-            grid=c.grid(), run_order=ro, kernel=c.kernel())
+            grid=c.grid(), run_order=ro, kernel=c.kernel(), space=c.space())
         if step is None:
             return {"skipped": "not enough runs for a before/after comparison"}
         row = H.row_from_step(step, method=str(names[-1] if names else ""),
-                              kernel=c.kernel(), model_dim=4)
+                              kernel=c.kernel(), model_dim=c.space().d)
         H.append(c.root, row)
         return {"reading": step.reading(),
                 "mean_sd_before": step.mean_sd_before,

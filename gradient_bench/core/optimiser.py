@@ -56,6 +56,26 @@ FOUR CHOICES WORTH KNOWING
    dimensions only, so the optimize_acqf call, its bounds and its constraint
    triple are identical in both modes. Off by default; see the note in
    `suggest_next` about what it does not fix.
+
+5. THE SHAPE-AWARE KERNELS (version 3) COMPARE PROFILES, NOT COORDINATES.
+   `wasserstein` and `wasserstein_plus` replace the coordinate kernel over
+   (start_phi, end_phi) with exp(-d_W / l_W), where d_W is the area between
+   the two normalised gradient profiles - the Wasserstein-1 distance of
+   Boelrijk et al. (2026) - and multiply it by an RBF over duration and
+   temperature (and, for `plus`, over the endpoints too). They are built in
+   `shape.py`, carry BoTorch's own priors, and report a `shape` lengthscale
+   beside the parameter lengthscales. Everything downstream - the fit, the
+   acquisition, the noise floor, the uncertainty audit - is unchanged: a
+   covariance module is a covariance module. What changes is what "nearby"
+   means. Each comes with the second factor as an RBF (the paper) or a
+   Matern-5/2. See the shape.py docstring for why they matter most in the
+   steps8 space.
+
+6. THE DESIGN SPACE IS A PER-CAMPAIGN FACT TOO (version 3).  Every function
+   here takes a `space` (default: the single ramp) and reads its dimension,
+   bounds and linear constraints from it. The acquisition optimiser receives
+   the space's constraints as BoTorch inequality triples, so proposals are
+   feasible by construction in either space.
 """
 from __future__ import annotations
 
@@ -256,17 +276,19 @@ def run_order_to_norm(run_order):
     return run_order_to_abs(run_order) / RUN_ORDER_SPAN
 
 
-def augment_run_order(U, run_order=None, model_run_order: bool = False) -> np.ndarray:
-    """(N,4) -> (N,5) when run order is modelled; pass-through when not.
+def augment_run_order(U, run_order=None, model_run_order: bool = False,
+                      d: int = 4) -> np.ndarray:
+    """(N,d) -> (N,d+1) when run order is modelled; pass-through when not.
 
-    Idempotent: already-5-column input is returned unchanged.
+    Idempotent: already-augmented input is returned unchanged.
     """
     U = np.atleast_2d(np.asarray(U, dtype=float))
     if not model_run_order:
-        if U.shape[1] != 4:
-            raise ValueError(f"run order is off but got {U.shape[1]} columns")
+        if U.shape[1] != d:
+            raise ValueError(f"run order is off but got {U.shape[1]} columns, "
+                             f"expected {d}")
         return U
-    if U.shape[1] == 5:
+    if U.shape[1] == d + 1:
         return U
     if run_order is None:
         raise ValueError("run order is modelled: every training row needs its "
@@ -280,24 +302,26 @@ def augment_run_order(U, run_order=None, model_run_order: bool = False) -> np.nd
     return np.column_stack([U, run_order_to_abs(t)])
 
 
-def model_dim(model_run_order: bool) -> int:
-    return 5 if model_run_order else 4
+def model_dim(model_run_order: bool, space: S.Space = S.RAMP4) -> int:
+    return space.d + 1 if model_run_order else space.d
 
 
-def model_names(model_run_order: bool) -> list[str]:
-    return list(P5_NAMES) if model_run_order else list(S.P4_NAMES)
+def model_names(model_run_order: bool, space: S.Space = S.RAMP4) -> list[str]:
+    return list(space.names) + (["run_order"] if model_run_order else [])
 
 
-def _model_bounds(model_run_order: bool):
+def _model_bounds(model_run_order: bool, space: S.Space = S.RAMP4):
     torch = _torch()
-    lo, hi = (P5_LOWER, P5_UPPER) if model_run_order else (S.P4_LOWER, S.P4_UPPER)
+    lo, hi = space.lower, space.upper
+    if model_run_order:
+        lo, hi = np.append(lo, 0.0), np.append(hi, RUN_ORDER_SPAN)
     return torch.stack([torch.tensor(lo, **tkwargs()), torch.tensor(hi, **tkwargs())])
 
 
-def _candidate_bounds():
+def _candidate_bounds(space: S.Space = S.RAMP4):
     torch = _torch()
-    return torch.stack([torch.tensor(S.P4_LOWER, **tkwargs()),
-                        torch.tensor(S.P4_UPPER, **tkwargs())])
+    return torch.stack([torch.tensor(space.lower, **tkwargs()),
+                        torch.tensor(space.upper, **tkwargs())])
 
 
 # ── the surrogate ───────────────────────────────────────────────────────────
@@ -311,10 +335,14 @@ class FitResult:
     lengthscales: np.ndarray = field(default_factory=lambda: np.array([]))
     noise_sd_crf: float = float("nan")
     kernel: str = ""
+    #: What each entry of `lengthscales` is: the inputs for a coordinate
+    #: kernel, `shape` plus the second factor's features for a shape-aware one.
+    lengthscale_names: list[str] = field(default_factory=list)
+    space: S.Space = S.RAMP4
 
     def lengthscale_table(self) -> list[tuple[str, float, str]]:
-        """(name, value, reading) per input."""
-        names = model_names(self.model_run_order)
+        """(name, value, reading) per lengthscale."""
+        names = self.lengthscale_names or model_names(self.model_run_order, self.space)
         return [(nm, float(v), lengthscale_reading(nm, v))
                 for nm, v in zip(names, np.resize(self.lengthscales, len(names)))]
 
@@ -370,6 +398,21 @@ def lengthscale_reading(name: str, v: float) -> str:
     v = float(v)
     if not np.isfinite(v):
         return "unreadable"
+    if name == "shape":
+        # The profile lengthscale is in units of d_W: the area between two
+        # normalised profiles, at most 1. Correlation is e^-1 at d_W = l.
+        if v <= LS_FLOOR:
+            return ("at the floor - collapsed: the fit could not identify how "
+                    "far apart two profiles must be before the score changes")
+        if v > LS_INERT:
+            return "inert - the profile shape barely moves the score inside the box"
+        if v < 0.1:
+            return ("short - only near-identical profiles inform each other "
+                    "(the score changes over a small shift of the ramp)")
+        if v > 1.0:
+            return ("long - profiles anywhere in the box inform each other; the "
+                    "score changes slowly with the shape of the ramp")
+        return "active - the profile shape matters, and neighbouring ramps inform each other"
     if name == "run_order":
         # Run order is the only input whose short lengthscale is bad news
         # rather than information: it means the response decorrelates in TIME.
@@ -398,8 +441,24 @@ def lengthscale_reading(name: str, v: float) -> str:
 #: The choice is made ONCE, at campaign creation, on the Campaign
 #: tab, and it is locked afterwards. A campaign fitted under one kernel and
 #: refitted under another is not the same campaign, so there is no toggle.
-KERNELS = ("matern52", "matern32", "rbf", "default")
+KERNELS = ("matern52", "matern32", "rbf",
+           "wasserstein", "wasserstein_matern",
+           "wasserstein_plus", "wasserstein_plus_matern",
+           "default")
 DEFAULT_KERNEL = "matern52"
+#: The version-3 shape-aware kernels. Same GP, same priors, same acquisition;
+#: a different statement of which methods are neighbours. Each is the profile
+#: term times a second factor: `_matern` uses a Matern-5/2 there, the plain
+#: key the paper's RBF.
+SHAPE_KERNELS = ("wasserstein", "wasserstein_matern",
+                 "wasserstein_plus", "wasserstein_plus_matern")
+
+
+def shape_kernel_parts(kernel: str) -> tuple[bool, str]:
+    """(plus, base) for a shape-aware key."""
+    if kernel not in SHAPE_KERNELS:
+        raise ValueError(f"{kernel!r} is not a shape-aware kernel")
+    return kernel.startswith("wasserstein_plus"), ("matern52" if kernel.endswith("_matern") else "rbf")
 
 #: What the interface shows when the analyst chooses. Every entry says what the
 #: choice IS, when it is the right one, and what it costs - the same three
@@ -442,6 +501,66 @@ SURROGATE_OPTIONS: list[dict[str, Any]] = [
      "tradeoff": "Where the response has an edge, an RBF must either smooth it "
                  "away or collapse a lengthscale to fit it; both make the "
                  "proposals worse than a Matérn's on the same data."},
+    {"key": "wasserstein", "label": "Shape-aware × RBF", "recommended": False,
+     "tag": "shape-aware",
+     "family": "Gaussian process, Wasserstein-1 × RBF",
+     "smoothness": "profile distance, exponential · RBF on duration and T",
+     "what": "Compares two methods by the AREA between the gradient profiles "
+             "they deliver, drawn on a normalised time axis, rather than by "
+             "their timetable coordinates. Duration and column temperature "
+             "are handled by a squared-exponential factor, so two methods are "
+             "neighbours only when shape, length and temperature all agree. "
+             "The paper's construction as published.",
+     "when": "The three-segment space, where many timetables draw the same "
+             "profile and this kernel knows it without spending runs; and "
+             "any campaign where the composition window a gradient sweeps is "
+             "what the separation responds to.",
+     "tradeoff": "One lengthscale for the whole profile, so it cannot say "
+                 "that the starting %B matters more than the shape; the plus "
+                 "forms can. In the single-ramp space there is no timetable "
+                 "redundancy to remove, so it changes what 'nearby' means "
+                 "rather than reproducing the paper's full gain. Not yet "
+                 "validated on this bench."},
+    {"key": "wasserstein_matern", "label": "Shape-aware × Matérn-5/2", "recommended": False,
+     "tag": "shape-aware",
+     "family": "Gaussian process, Wasserstein-1 × Matérn-5/2",
+     "smoothness": "profile distance, exponential · Matérn-5/2 on duration and T",
+     "what": "The shape-aware kernel with a Matérn-5/2 instead of the "
+             "paper's RBF for the duration and temperature factor: the same "
+             "profile comparison, with the twice-differentiable assumption "
+             "this app makes about a chromatographic response elsewhere.",
+     "when": "The same campaigns as the RBF form, when you would rather not "
+             "assume the score is infinitely smooth in duration and "
+             "temperature - a response that turns over a short temperature "
+             "interval, say.",
+     "tradeoff": "Departs from the published construction, so the paper's "
+                 "benchmarks do not cover it. Slightly wider posterior than "
+                 "the RBF form on the same data, because it promises less."},
+    {"key": "wasserstein_plus", "label": "Shape-aware plus endpoints × RBF",
+     "recommended": False, "tag": "shape-aware",
+     "family": "Gaussian process, Wasserstein-1 × ARD RBF",
+     "smoothness": "profile distance · RBF on start, end, duration and T",
+     "what": "The shape-aware kernel multiplied by an ARD squared-exponential "
+             "over the start and end %B, the duration and the temperature, "
+             "so the endpoints get lengthscales of their own on top of the "
+             "profile comparison - the paper's Wasserstein+.",
+     "when": "A sample where one endpoint dominates - many analytes eluting "
+             "at low %B make the starting composition decisive, which is what "
+             "the paper saw on its experimental datasets.",
+     "tradeoff": "Five lengthscales to fit instead of three: on a small budget "
+                 "the extra flexibility can cost more than it earns, and the "
+                 "paper found its advantage over the plain form inconsistent "
+                 "in silico. Not yet validated on this bench."},
+    {"key": "wasserstein_plus_matern", "label": "Shape-aware plus endpoints × Matérn-5/2",
+     "recommended": False, "tag": "shape-aware",
+     "family": "Gaussian process, Wasserstein-1 × ARD Matérn-5/2",
+     "smoothness": "profile distance · Matérn-5/2 on start, end, duration and T",
+     "what": "Wasserstein+ with a Matérn-5/2 for the endpoint factor instead "
+             "of the paper's RBF.",
+     "when": "As for the RBF plus form, when the endpoint response is "
+             "expected to have edges rather than to vary gently.",
+     "tradeoff": "Departs from the published construction; five lengthscales "
+                 "on a small budget."},
     {"key": "default", "label": "Installed BoTorch default", "recommended": False,
      "family": "Gaussian process",
      "smoothness": "whatever the installed version builds",
@@ -562,7 +681,8 @@ def describe_acquisition(acquisition: str,
     return f"{opt['class']}" + (f" ({extra})" if extra else "")
 
 
-def make_covar_module(d: int, kernel: str = DEFAULT_KERNEL):
+def make_covar_module(d: int, kernel: str = DEFAULT_KERNEL,
+                      space: S.Space = S.RAMP4):
     """The covariance module, with BoTorch's priors intact.
 
     Returns None for `default`, meaning "pass nothing and let the installed
@@ -578,6 +698,10 @@ def make_covar_module(d: int, kernel: str = DEFAULT_KERNEL):
         raise ValueError(f"kernel must be one of {KERNELS}, not {kernel!r}")
     if kernel == "default":
         return None
+    if kernel in SHAPE_KERNELS:
+        from . import shape as SHP
+        plus, base = shape_kernel_parts(kernel)
+        return SHP.make_shape_kernel(d, space, plus=plus, base=base)
     from botorch.models.utils.gpytorch_modules import (
         get_covar_module_with_dim_scaled_prior)
     try:
@@ -608,11 +732,11 @@ def make_covar_module(d: int, kernel: str = DEFAULT_KERNEL):
             f"version, or set the campaign's kernel to 'default'.") from exc
 
 
-def describe_kernel(kernel: str, d: int) -> dict[str, Any]:
+def describe_kernel(kernel: str, d: int, space: S.Space = S.RAMP4) -> dict[str, Any]:
     """What the campaign's kernel choice actually builds. For the Method page."""
-    out = {"kernel": kernel, "d": d, "available": False}
+    out = {"kernel": kernel, "d": d, "available": False, "space": space.key}
     try:
-        cm = make_covar_module(d, kernel)
+        cm = make_covar_module(d, kernel, space)
     except Exception as exc:                                  # noqa: BLE001
         out["error"] = f"{type(exc).__name__}: {exc}"
         return out
@@ -620,13 +744,81 @@ def describe_kernel(kernel: str, d: int) -> dict[str, Any]:
     if cm is None:
         out["module"] = "none passed - the installed BoTorch's own default"
         return out
+    if hasattr(cm, "kernels"):
+        # A product of factors (the shape-aware kernels). Describe each.
+        from . import shape as SHP
+        names = model_names(d == space.d + 1, space)
+        facs = SHP.shape_kernel_factors(cm, names)
+        out["module"] = type(cm).__name__
+        out["base"] = " x ".join(f["module"] for f in facs)
+        out["nu"] = float("nan")
+        out["ard_num_dims"] = int(sum(f["ard_num_dims"] for f in facs))
+        out["outputscale"] = hasattr(cm, "outputscale")
+        out["factors"] = [{k: v for k, v in f.items()
+                           if k not in ("prior", "constraint")} for f in facs]
+        out["lengthscale_names"] = [n for f in facs for n in f["lengthscale_names"]]
+        return out
     base = getattr(cm, "base_kernel", cm)
     out["module"] = type(cm).__name__
     out["base"] = type(base).__name__
     out["nu"] = float(getattr(base, "nu", float("nan")))
     out["ard_num_dims"] = int(getattr(base, "ard_num_dims", d) or d)
     out["outputscale"] = hasattr(cm, "outputscale")
+    out["lengthscale_names"] = model_names(d == space.d + 1, space)
     return out
+
+
+def lengthscale_names_for(kernel: str, model_run_order: bool = False,
+                          space: S.Space = S.RAMP4) -> list[str]:
+    """The names the fitted lengthscales are reported under, WITHOUT a fit
+    and without torch: the history file and the ARD table need them from a
+    kernel key alone.
+
+    Coordinate kernels report one per input. The shape-aware kernels report
+    `shape` for the profile term, then one per feature the second factor
+    reads - the same feature names in every space, because they are the
+    same quantities.
+    """
+    names = model_names(model_run_order, space)
+    if kernel in SHAPE_KERNELS:
+        from . import shape as SHP
+        plus, _ = shape_kernel_parts(kernel)
+        feats = list(SHP.PLUS_FEATURES if plus else SHP.REST_FEATURES)
+        return ["shape"] + feats + (["run_order"] if model_run_order else [])
+    return names
+
+
+def kernel_note(kernel: str) -> str:
+    """The one-paragraph statement written into a new campaign's Config
+    sheet beside the kernel key: what was built and why, in words that will
+    still be true when the folder is opened years later."""
+    opt = surrogate_option(kernel)
+    if kernel in SHAPE_KERNELS:
+        plus, base = shape_kernel_parts(kernel)
+        second = "squared-exponential" if base == "rbf" else "Matern-5/2"
+        return ("Shape-aware covariance (version 3): exp(-d_W / l_W) in the "
+                "Wasserstein-1 distance between the normalised gradient "
+                "profiles - the area between them on a 0-1 time axis with %B "
+                "as a fraction (Boelrijk et al., ChemRxiv 2026, Eqs. 15-17) - "
+                f"multiplied by a {second} kernel over "
+                + ("the start and end %B, the method duration and the column "
+                   "temperature, so the endpoints keep their own lengthscales "
+                   "(Wasserstein+, Eq. 19)."
+                   if plus else
+                   "method duration and column temperature, which the profile "
+                   "comparison deliberately discards (Eq. 18).")
+                + " l_W carries BoTorch's dimension-scaled LogNormal prior "
+                "with D = 1 and the GreaterThan(0.025) constraint; the second "
+                "factor is built by BoTorch's own constructor with its priors "
+                "intact. Chosen at creation and locked: " + opt["what"])
+    return ("Built by BoTorch's own get_covar_module_with_dim_scaled_prior, so "
+            "the hyperparameter priors are BoTorch's and not ours: "
+            "LogNormal(sqrt(2)+ln(d)/2, sqrt(3)) on the lengthscales, "
+            "GreaterThan(0.025), no outputscale. Matern-5/2 is twice "
+            "differentiable where an RBF is infinitely smooth, which is the "
+            "weaker assumption for a chromatographic response in general - not "
+            "a statement about any particular sample. Chosen at creation and "
+            "locked: " + opt["what"])
 
 
 def _ard_lengthscales(model, d: int) -> np.ndarray:
@@ -640,9 +832,32 @@ def _ard_lengthscales(model, d: int) -> np.ndarray:
     return np.atleast_1d(ls.detach().squeeze().cpu().numpy()).ravel()
 
 
+def kernel_lengthscales(model, d: int, model_run_order: bool = False,
+                        space: S.Space = S.RAMP4) -> tuple[list[str], np.ndarray]:
+    """(names, values) of every lengthscale the fitted model carries.
+
+    A single kernel reports one per input. A product (the shape-aware
+    kernels) reports each factor's in turn: `shape` for the Wasserstein term,
+    then the inputs the RBF factor reads. The names come from the module
+    itself, not from the kernel key, so the ARD table can never claim a
+    lengthscale the fit did not produce.
+    """
+    cm = getattr(model, "covar_module", None)
+    if cm is not None and hasattr(cm, "kernels"):
+        from . import shape as SHP
+        names_out: list[str] = []
+        vals: list[float] = []
+        for f, v in zip(SHP.shape_kernel_factors(cm, model_names(model_run_order, space)),
+                        SHP.factor_lengthscales(cm)):
+            names_out += list(f["lengthscale_names"])
+            vals += [float(x) for x in np.resize(v, len(f["lengthscale_names"]))]
+        return names_out, np.array(vals, dtype=float)
+    return list(model_names(model_run_order, space)), _ard_lengthscales(model, d)
+
+
 def fit_gp(train_u, train_y, sigma_crf: Optional[float] = None,
            run_order=None, model_run_order: bool = False,
-           kernel: str = DEFAULT_KERNEL) -> FitResult:
+           kernel: str = DEFAULT_KERNEL, space: S.Space = S.RAMP4) -> FitResult:
     """Fit the surrogate on one row per RUN (replicates repeat x)."""
     torch = _torch()
     from botorch.models import SingleTaskGP
@@ -659,12 +874,12 @@ def fit_gp(train_u, train_y, sigma_crf: Optional[float] = None,
         raise ValueError("need at least 2 observations to fit")
 
     nf = noise_floor_std(y, sigma_crf)
-    X = augment_run_order(U, run_order, model_run_order)
-    bounds = _model_bounds(model_run_order)
+    X = augment_run_order(U, run_order, model_run_order, d=space.d)
+    bounds = _model_bounds(model_run_order, space)
     train_x = normalize(torch.as_tensor(X, **tkwargs()), bounds)
     ty = torch.as_tensor(y, **tkwargs()).unsqueeze(-1)
 
-    covar = make_covar_module(X.shape[1], kernel)
+    covar = make_covar_module(X.shape[1], kernel, space)
     model = SingleTaskGP(train_x, ty,
                          likelihood=_make_likelihood(nf.floor_z),
                          outcome_transform=Standardize(m=1),
@@ -674,10 +889,11 @@ def fit_gp(train_u, train_y, sigma_crf: Optional[float] = None,
     scale = float(np.atleast_1d(
         model.outcome_transform.stdvs.detach().cpu().numpy()).ravel()[0])
     noise_sd = float(model.likelihood.noise.detach().sqrt().mean()) * scale
+    ls_names, ls = kernel_lengthscales(model, X.shape[1], model_run_order, space)
     return FitResult(model=model, noise=nf, n=len(y), d=X.shape[1],
                      model_run_order=model_run_order,
-                     lengthscales=_ard_lengthscales(model, X.shape[1]),
-                     noise_sd_crf=noise_sd, kernel=kernel)
+                     lengthscales=ls, noise_sd_crf=noise_sd, kernel=kernel,
+                     lengthscale_names=ls_names, space=space)
 
 
 def posterior(fit: FitResult, U, observation_noise: bool = False,
@@ -694,8 +910,9 @@ def posterior(fit: FitResult, U, observation_noise: bool = False,
     torch = _torch()
     from botorch.utils.transforms import normalize
     X = augment_run_order(np.atleast_2d(np.asarray(U, dtype=float)),
-                          run_order, fit.model_run_order)
-    x = normalize(torch.as_tensor(X, **tkwargs()), _model_bounds(fit.model_run_order))
+                          run_order, fit.model_run_order, d=fit.space.d)
+    x = normalize(torch.as_tensor(X, **tkwargs()),
+                  _model_bounds(fit.model_run_order, fit.space))
     fit.model.eval()
     with torch.no_grad():
         post = fit.model.posterior(x, observation_noise=observation_noise)
@@ -758,7 +975,8 @@ def suggest_next(train_u, train_y, sigma_crf: Optional[float] = None,
                  fit: Optional[FitResult] = None,
                  kernel: str = DEFAULT_KERNEL,
                  acquisition: str = DEFAULT_ACQUISITION,
-                 acq_params: Optional[dict] = None) -> Suggestion:
+                 acq_params: Optional[dict] = None,
+                 space: S.Space = S.RAMP4) -> Suggestion:
     """Fit and return the next method to run.
 
     NOTE on the fifth input, if it is ever switched on: X_baseline carries each
@@ -777,11 +995,13 @@ def suggest_next(train_u, train_y, sigma_crf: Optional[float] = None,
         torch.manual_seed(int(seed))
     if fit is None:
         fit = fit_gp(train_u, train_y, sigma_crf, run_order, model_run_order,
-                     kernel=kernel)
+                     kernel=kernel, space=space)
+    space = fit.space
+    d = space.d
 
-    Xb = augment_run_order(np.atleast_2d(train_u), run_order, model_run_order)
+    Xb = augment_run_order(np.atleast_2d(train_u), run_order, model_run_order, d=d)
     train_x = normalize(torch.as_tensor(Xb, **tkwargs()),
-                        _model_bounds(model_run_order))
+                        _model_bounds(model_run_order, space))
 
     params = resolve_acq_params(acquisition, acq_params)
     acq, reason = _build_acquisition(fit, train_x, train_y, acquisition, params)
@@ -791,22 +1011,23 @@ def suggest_next(train_u, train_y, sigma_crf: Optional[float] = None,
                 "run order is modelled but next_run_order was not given. "
                 "Refusing to guess when 'now' is.")
         t_pin = float(run_order_to_norm(next_run_order))
-        acq = FixedFeatureAcquisitionFunction(acq_function=acq, d=5,
-                                              columns=[4], values=[t_pin])
+        acq = FixedFeatureAcquisitionFunction(acq_function=acq, d=d + 1,
+                                              columns=[d], values=[t_pin])
 
-    norm_bounds = torch.stack([torch.zeros(4, **tkwargs()),
-                               torch.ones(4, **tkwargs())])
-    ineq = [(torch.tensor(S.CON_IDX),
-             torch.tensor(S.CON_COEF, **tkwargs()),
-             S.CON_RHS)]
+    norm_bounds = torch.stack([torch.zeros(d, **tkwargs()),
+                               torch.ones(d, **tkwargs())])
+    # the space's linear constraints, as BoTorch inequality triples: feasible
+    # by construction, not by rejection
+    ineq = [(torch.tensor(idx), torch.tensor(coef, **tkwargs()), rhs)
+            for idx, coef, rhs in space.normalised_constraints()]
     cand_x, acq_val = optimize_acqf(
         acq_function=acq, bounds=norm_bounds, q=1,
         num_restarts=num_restarts, raw_samples=raw_samples,
         inequality_constraints=ineq)
-    cand = unnormalize(cand_x, _candidate_bounds()).detach().cpu().numpy()
+    cand = unnormalize(cand_x, _candidate_bounds(space)).detach().cpu().numpy()
 
     # the gate again: nothing leaves this function unchecked
-    u = S.require_feasible(np.atleast_2d(cand)[0], "acquisition candidate")
+    u = space.require_feasible(np.atleast_2d(cand)[0], "acquisition candidate")
     mu, sd = posterior(fit, u.reshape(1, -1), run_order=next_run_order)
     return Suggestion(u=u, acq_value=float(acq_val),
                       posterior_mean=float(mu[0]), posterior_sd=float(sd[0]),
@@ -814,6 +1035,7 @@ def suggest_next(train_u, train_y, sigma_crf: Optional[float] = None,
                       acquisition=acquisition, acq_params=params)
 
 
-def cold_start_methods(n: int, seed: Optional[int] = None) -> np.ndarray:
+def cold_start_methods(n: int, seed: Optional[int] = None,
+                       space: S.Space = S.RAMP4) -> np.ndarray:
     """n feasible seed methods, before any model exists."""
-    return S.initial_sample(int(n), seed=seed)
+    return space.initial_sample(int(n), seed=seed)
