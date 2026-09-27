@@ -60,13 +60,37 @@ Every fifth method the app interrupts to ask for the instrument check instead.
 Python 3.9 or newer, and about **3 GB of disk** — almost all of it `torch`. Nothing else:
 no Node, no database, no account.
 
+**Windows.** The PC beside an HPLC usually is one, so this is the path to expect.
+
+```powershell
+git clone https://github.com/amyth-create/gradient-bench.git
+cd gradient-bench
+py -3 -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r gradient_bench/requirements.txt
+```
+
+Use `python -m venv .venv` if `py` is not on PATH, which is usually a Microsoft Store
+install rather than one from python.org. In `cmd.exe` the activation line is
+`.venv\Scripts\activate.bat` instead of the `.ps1`. If PowerShell refuses to run the
+activation script at all, that is the execution policy and not the install — this clears it
+for the current window only, and needs no administrator:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+```
+
+**macOS / Linux.**
+
 ```bash
 git clone https://github.com/amyth-create/gradient-bench.git
 cd gradient-bench
 python3 -m venv .venv
-source .venv/bin/activate                 # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -r gradient_bench/requirements.txt
 ```
+
+Once the environment is active, every command below is the same on every platform.
 
 `torch` and BoTorch are needed to **propose** a method, not to **record** one. Without them
 the app still opens campaigns, picks peaks, scores traces and writes results — only the
@@ -79,12 +103,18 @@ python -m gradient_bench.scripts.verify_install    # says what is missing and wh
 python -m pytest gradient_bench/tests -q           # expect 147 passed
 ```
 
+**Keep the workbook closed while the app is recording.** A campaign's
+`master_methods.xlsx` is rewritten on every recorded run, and Windows will not let a file be
+replaced while another program holds it open — a campaign left open in Excel makes recording
+fail with *Access is denied*. Read it whenever you like; close it before you record.
+
 ### Run it
 
 ```bash
 python -m gradient_bench.api.app                   # http://127.0.0.1:5051
 python -m gradient_bench.api.app --port 8000       # or pick a port
 python -m gradient_bench.api.app --open /path/to/a/campaign
+python -m gradient_bench.api.app --open C:\Campaigns\project-x     # Windows
 ```
 
 The frontend is pre-built into `gradient_bench/api/static/`, so nothing needs Node. To
