@@ -150,8 +150,21 @@ def write_new(path: str, frames: dict[str, pd.DataFrame]) -> str:
 
 
 def read_all(path: str) -> dict[str, pd.DataFrame]:
-    xl = pd.ExcelFile(path)
-    return {n: pd.read_excel(xl, sheet_name=n) for n in xl.sheet_names}
+    """Every sheet in the workbook, by name.
+
+    THE HANDLE MUST BE CLOSED BEFORE THE CALLER WRITES. `pd.ExcelFile` holds an
+    open handle on the workbook, and the openpyxl object graph behind it is
+    cyclic - so refcounting alone never frees it, and the handle survives until
+    the cyclic collector happens to run. On POSIX that is invisible, because a
+    rename over an open file succeeds. On Windows it is not: the `os.replace`
+    in `_atomic_write` fails with PermissionError [WinError 5] while any handle
+    on the destination is still open. Every caller here reads the workbook and
+    then writes it back - `append_run`, `write_campaign`, `write_config` - so
+    leaving the close to the garbage collector makes recording a run fail on
+    timing luck, on the one platform the instrument PCs actually run.
+    """
+    with pd.ExcelFile(path) as xl:
+        return {n: pd.read_excel(xl, sheet_name=n) for n in xl.sheet_names}
 
 
 def read_data(path: str) -> pd.DataFrame:
