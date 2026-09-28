@@ -1,5 +1,63 @@
 # Changelog
 
+## 1.1.0 — version 3: a second design space and shape-aware surrogates (2026-09-15)
+
+After Boelrijk, Detlefsen, Dürholt and Haas, *Shape-aware Gaussian process kernels for
+closed-loop Bayesian optimization of gradients in automated LC method development*
+(ChemRxiv, 2026).
+
+### The science
+
+- **The design space is a per-campaign choice, locked at creation** like the kernel.
+  `ramp4` (the default, unchanged) is the single ramp. `steps8` is a four-node pump
+  timetable written in deltas: a starting %B, three composition steps, three time steps
+  (the first node is always at t = 0) and the column temperature. A composition step of
+  zero is a hold, a time step of zero an instantaneous jump. Monotonicity lives in the
+  box and nothing else is bounded per segment; the only constraints are on the sums (final
+  %B at most 100, duration at most 30 min, and a 1-minute technical floor on the total),
+  every one handed to the acquisition optimiser natively. Cold-start seeds come from the
+  paper's window-relative sampler. The instrument check stays a single ramp.
+- **Four shape-aware surrogates.** The distance between two methods is the area between
+  their gradient profiles on a normalised 0–1 time axis with %B as a fraction (the
+  Wasserstein-1 distance, Eq. 16), turned into a covariance as `exp(−d_W/ℓ_W)` (Eq. 17)
+  and multiplied by a second kernel over duration and temperature (Eq. 18) — `wasserstein`
+  with the paper's RBF, `wasserstein_matern` with a Matérn-5/2 — or over start %B, end %B,
+  duration and temperature as well, the paper's Wasserstein+ (Eq. 19): `wasserstein_plus`
+  and `wasserstein_plus_matern`. In `steps8` the endpoint features are derived from the
+  timetable inside the kernel.
+- The profile distance is implemented for piecewise-linear profiles in general, exactly
+  (union of breakpoints, closed form per interval), in numpy and as a differentiable torch
+  kernel; tested against quadrature, the metric axioms, the Gram matrix's eigenvalues, the
+  identity `d_W = 0` between two timetables that draw the same profile, and vertical steps.
+- Priors stay BoTorch's: `ℓ_W` carries the dimension-scaled LogNormal with D = 1 and the
+  `GreaterThan(0.025)` constraint; the second factor is built by BoTorch's own constructor.
+- Matérn-5/2 on the single ramp remains the recommended default. The shape-aware kernels
+  earn their keep in `steps8`, where many timetables draw one profile; in `ramp4` they only
+  change what *nearby* means. None is yet validated on this bench.
+
+### The app
+
+- The new-campaign wizard's model step now makes three locked choices: design space,
+  surrogate, acquisition. Shape-aware kernels carry a *shape-aware* tag.
+- The Run and Results tabs render a gradient table of any number of nodes, and the Results
+  methods table gains a *segments* column. Campaign cards, the Setup tab and the Model tab
+  name the space.
+- The Model tab reports a `shape` lengthscale — in units of area between profiles — with a
+  note on how to read it, and names derived features as such in `steps8`.
+- The Method page prints the campaign's space (parameters, every constraint in absolute and
+  normalised form, the sampler, the gate) and each factor of a product kernel with its
+  features, prior and constraint, assembled from the running module as before.
+- The uncertainty history widens with `ls_shape` and the `steps8` names only on campaigns
+  that use them. `replay_corpus` takes `--kernel`.
+- Glossary: *design space*, *timetable redundancy*, *shape-aware*, *Wasserstein*,
+  *gradient profile*, *shape lengthscale*.
+
+### Compatibility
+
+Campaign folders written by 1.0.0 open unchanged: a folder without a `space` key reads as
+the single ramp, and keeps the kernel it was created with. Nothing about the objective, the
+noise model, the acquisition or the drift chart has changed.
+
 ## 1.0.0 — first release (2026-09-09)
 
 Closed-loop HPLC gradient method development: the app proposes a gradient, you run it and

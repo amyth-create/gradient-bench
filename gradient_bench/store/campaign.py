@@ -150,6 +150,16 @@ class Campaign:
         except Exception:
             return 2
 
+    def space(self) -> S.Space:
+        """The design space this campaign searches (version 3).
+
+        Chosen at creation and locked, for the same reason as the kernel: a
+        campaign's runs are points in ONE space, and a folder written before
+        this setting existed searched the single ramp.
+        """
+        k = str(self.config().get("space", "") or "").strip().lower()
+        return S.SPACES.get(k, S.RAMP4)
+
     def kernel(self) -> str:
         """The covariance kernel this campaign is fitted with.
 
@@ -204,7 +214,9 @@ class Campaign:
         except Exception:
             ko = {"label": k}
         ao = O.acquisition_option(a)
+        sp = self.space()
         return {"kernel": k, "kernel_label": ko.get("label", k),
+                "space": sp.key, "space_label": sp.label, "space_d": sp.d,
                 "acquisition": a, "acquisition_label": ao["label"],
                 "acquisition_short": ao["short"],
                 "acq_params": self.acq_params(),
@@ -434,10 +446,11 @@ class Campaign:
         fitted to. See `incumbent()`.
         """
         d = self.design()
+        sp = self.space()
         if not len(d):
-            e = np.zeros((0, 4))
+            e = np.zeros((0, sp.d))
             return e, np.zeros(0), [], np.zeros(0)
-        U = np.array([S.abs_to_4param(r) for _, r in d.iterrows()])
+        U = np.array([sp.from_abs(r) for _, r in d.iterrows()])
         y = pd.to_numeric(d["CRF"], errors="coerce").to_numpy(float)
         ro = pd.to_numeric(d["run_order"], errors="coerce").to_numpy(float)
         return U, y, [str(m) for m in d["method"]], ro
@@ -495,7 +508,8 @@ class Campaign:
         for base, g in d.groupby(d["method"].map(SH.method_base), sort=False):
             y = pd.to_numeric(g["CRF"], errors="coerce").to_numpy(float)
             ro = pd.to_numeric(g["run_order"], errors="coerce").to_numpy(float)
-            u = S.abs_to_4param(g.iloc[0])
+            sp = S.space_for_row(g.iloc[0])
+            u = sp.from_abs(g.iloc[0])
             n_scored = int(np.isfinite(y).sum())
             out.append({
                 "method": str(base),
@@ -516,8 +530,8 @@ class Campaign:
                 "crf_adjusted": (float(np.nanmean([adj[m] for m in g["method"]
                                                    if m in adj]))
                                  if any(m in adj for m in g["method"]) else None),
-                "start_phi": float(u[0]), "end_phi": float(u[1]),
-                "duration_min": float(u[2]), "T": float(u[3]),
+                **sp.summary(u),
+                "u": [float(x) for x in u], "space": sp.key,
                 "n_clean_peaks": float(pd.to_numeric(
                     g["n_clean_peaks"], errors="coerce").mean()),
                 "hump_time_fraction": float(pd.to_numeric(
@@ -644,11 +658,14 @@ class Campaign:
 
     def grid(self) -> np.ndarray:
         from ..core import uncertainty as UNC
+        sp = self.space()
         if os.path.exists(self.grid_path):
             g = np.load(self.grid_path)
-            if g.shape[1] == 4 and all(S.check4(u)[0] for u in g):
+            # the grid must be a set of methods in THIS campaign's space; a
+            # file of the wrong width is regenerated, not trusted
+            if g.ndim == 2 and g.shape[1] == sp.d and bool(sp.mask(g).all()):
                 return g
-        g = UNC.make_reference_grid()
+        g = UNC.make_reference_grid(space=sp)
         np.save(self.grid_path, g)
         return g
 
@@ -662,9 +679,17 @@ def create(parent_dir: str, info: dict[str, Any], *, reference_method,
            kernel: str = O.DEFAULT_KERNEL,
            acquisition: str = O.DEFAULT_ACQUISITION,
            acq_params: Optional[dict] = None,
-           acq_num_restarts: int = 10, acq_raw_samples: int = 512) -> Campaign:
-    """Create a campaign folder under `parent_dir` and write its workbook."""
-    u = S.require_feasible(reference_method, "reference method")
+           acq_num_restarts: int = 10, acq_raw_samples: int = 512,
+           space: str = S.DEFAULT_SPACE) -> Campaign:
+    """Create a campaign folder under `parent_dir` and write its workbook.
+
+    The reference (instrument-check) method is ALWAYS a single ramp, whatever
+    space the campaign searches: it is a fixed method the instrument repeats,
+    not a point the model sees, and a ramp is the simplest thing to key in
+    and to compare across campaigns.
+    """
+    u = S.RAMP4.require_feasible(reference_method, "reference method")
+    sp = S.space(space)
     if kernel not in O.KERNELS:
         raise ValueError(f"kernel must be one of {O.KERNELS}, not {kernel!r}")
     if acquisition not in O.ACQUISITIONS:
@@ -678,7 +703,7 @@ def create(parent_dir: str, info: dict[str, Any], *, reference_method,
     # whether the budget could pay for the anchor plus one replicated method,
     # which was the right question while the budget was in injections.
     run_budget = B.validate_budget(run_budget)
-    if S.is_isocratic(u):
+    if S.RAMP4.is_isocratic(u):
         raise ValueError("an isocratic reference has little structure to lose; "
                          "choose a gradient the instrument can degrade")
     name = (info or {}).get("name") or "Untitled campaign"
@@ -706,16 +731,10 @@ def create(parent_dir: str, info: dict[str, Any], *, reference_method,
     pcfg.update(picker_config or {})
     cfg = {
         "surrogate": "BoTorch SingleTaskGP",
+        "space": sp.key,
+        "space_note": sp.label + ": " + sp.what,
         "kernel": kernel,
-        "kernel_note":
-            "Built by BoTorch's own get_covar_module_with_dim_scaled_prior, so "
-            "the hyperparameter priors are BoTorch's and not ours: "
-            "LogNormal(sqrt(2)+ln(d)/2, sqrt(3)) on the lengthscales, "
-            "GreaterThan(0.025), no outputscale. Matern-5/2 is twice "
-            "differentiable where an RBF is infinitely smooth, which is the "
-            "weaker assumption for a chromatographic response in general - not "
-            "a statement about any particular sample. Chosen at creation and "
-            "locked: " + O.surrogate_option(kernel)["what"],
+        "kernel_note": O.kernel_note(kernel),
         "outcome_transform": "Standardize(m=1)",
         "acquisition": acquisition,
         "acquisition_note": O.describe_acquisition(acquisition, acq_params),
@@ -725,10 +744,8 @@ def create(parent_dir: str, info: dict[str, Any], *, reference_method,
         "app_version": APP_VERSION,
         "parameters": json.dumps(
             {n_: [float(lo), float(hi)] for n_, lo, hi
-             in zip(S.P4_NAMES, S.P4_LOWER, S.P4_UPPER)}),
-        "constraint": f"end_phi >= start_phi + {S.MIN_SPAN}  (normalised: "
-                      f"{S.CON_COEF[0]:+.2f}*end_n {S.CON_COEF[1]:+.2f}*start_n "
-                      f">= {S.CON_RHS:+.2f})",
+             in zip(sp.names, sp.lower, sp.upper)}),
+        "constraint": "; ".join(c.label for c in sp.constraints),
         "crf_formula": "n_clean_peaks * (1 - hump_time_fraction) ** 2",
         "crf_version": CRF_VERSION,
         "crf_columns": json.dumps(CRF_COLUMNS),
@@ -790,6 +807,7 @@ def duplicate_settings(src: Campaign, parent_dir: str,
         reference_every=int(float(cfg.get("reference_every", D.REFERENCE_EVERY))),
         run_budget=src.budget_original(),
         kernel=src.kernel(), acquisition=src.acquisition(),
+        space=src.space().key,
         acq_params=src.acq_params(),
         acq_num_restarts=src.acq_settings()["num_restarts"],
         acq_raw_samples=src.acq_settings()["raw_samples"])

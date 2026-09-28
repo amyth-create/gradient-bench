@@ -42,6 +42,7 @@ export default function Model({ st }) {
       <div className="card">
         <div className="cardhead"><h3>What this campaign is fitted with</h3><Tag><Term k="locked">locked at creation</Term></Tag></div>
         <div className="tiles">
+          <Tile label="design space" term="design space" value={o.space_label || 'Single ramp'} note={`${o.space_d || 4} parameters · ${o.space || 'ramp4'}`} />
           <Tile label="surrogate" term="surrogate" value={o.kernel_label || d.kernel} note={`BoTorch SingleTaskGP · ${o.kernel || d.kernel}`} />
           <Tile label="acquisition" term="acquisition function" value={o.acquisition_short || 'qLogNEI'} note={o.description || ''} />
           <Tile label="fits recorded" value={d.n_design_runs} unit="design runs" note={`history rows: ${pts.length}`} />
@@ -70,13 +71,16 @@ export default function Model({ st }) {
         ) : (
           <>
             <p className="muted" style={{ maxWidth: '76ch' }}><Term k="ARD">ARD</Term> <Term k="lengthscale">lengthscales</Term> from the most recent fit, in normalised units — the design space is mapped to 0–1 before fitting, so a lengthscale near 1 means the score changes over about the whole range of that parameter, and one near 0.1 means it changes ten times faster. The bar is capped at 1.</p>
+            {d.ard.some((a) => a.name === 'shape') && (
+              <p className="muted" style={{ maxWidth: '76ch' }}>This campaign uses a <Term k="shape-aware">shape-aware</Term> kernel, so the first row is the <Term k="shape lengthscale">shape lengthscale</Term>: it is in units of the <Term k="Wasserstein">area between two gradient profiles</Term> (at most 1), not of a single parameter. Start and end %B enter the model through that profile comparison{(o.kernel || '').startsWith('wasserstein_plus') ? ' and, in the plus form, through their own lengthscales below as well' : ', so they have no lengthscale of their own here'}.{o.space === 'steps8' ? ' The rows named start %B, end %B and duration are features derived from the timetable, not parameters of it.' : ''}</p>
+            )}
             <div className="tablewrap">
               <table>
                 <thead><tr><th className="l">parameter</th><th>lengthscale</th><th className="l" style={{ width: '38%' }}>scale (0–1)</th><th className="l">reading</th></tr></thead>
                 <tbody>
                   {d.ard.map((a) => (
                     <tr key={a.name}>
-                      <td className="l mono">{a.name}</td>
+                      <td className="l mono">{a.name === 'shape' ? <Term k="shape lengthscale">shape</Term> : a.name}</td>
                       <td>{f(a.value, 3)}</td>
                       <td className="l"><LsBar value={a.value} reading={a.reading} /></td>
                       <td className="l" style={{ whiteSpace: 'normal', fontFamily: 'var(--f-ui)', fontSize: 13 }}>{a.reading}</td>

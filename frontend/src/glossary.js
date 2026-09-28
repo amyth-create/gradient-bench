@@ -221,6 +221,34 @@ Object.assign(TERMS, {
   LogPI: 'Log probability of improvement: propose wherever ANY improvement over the ' +
        'best observed score is most probable, however small. Greedy - it hugs the ' +
        'incumbent and under-explores.',
+  'design space': 'What a method IS to the optimiser: the list of numbers it may ' +
+       'choose and the box they live in. Single ramp (4 parameters: start %B, end ' +
+       '%B, duration, temperature) or three-segment timetable (8: a starting %B, ' +
+       'three composition steps, three time steps, temperature). Chosen once at ' +
+       'creation and locked, like the kernel.',
+  'timetable redundancy': 'A multi-node pump timetable can write one and the same ' +
+       'gradient profile many ways - slide a node along the straight line joining ' +
+       'its neighbours and the profile is unchanged while every coordinate moves. ' +
+       'A coordinate kernel has to learn from runs that those timetables are the ' +
+       'same experiment; a shape-aware kernel knows it by construction.',
+  'shape-aware': 'A kernel that compares two methods by the gradient PROFILE the ' +
+       'pump delivers rather than by the numbers in the timetable: how much area ' +
+       'lies between the two ramps once both are drawn on a 0-1 time axis. Two ' +
+       'methods sweeping nearly the same composition window count as neighbours ' +
+       'even if their start and end %B differ. New in version 3.',
+  Wasserstein: 'The distance between two gradient profiles used by the shape-aware ' +
+       'kernels: the area between them on a normalised time axis, with %B as a ' +
+       'fraction. For monotonic one-dimensional profiles that area is the ' +
+       'Wasserstein-1 distance (Boelrijk, Detlefsen, Duerholt and Haas, 2026). ' +
+       'It is at most 1, and it is zero only for identical profiles.',
+  'gradient profile': 'The continuous %B-against-time curve the pump realises from ' +
+       'the gradient table. In this app every method is one ramp, so the ' +
+       'profile is a straight line from (0, start %B) to (duration, end %B).',
+  'shape lengthscale': 'How far apart two profiles must be - in area between them, ' +
+       'at most 1 - before the score changes appreciably. Short means the ' +
+       'separation is sensitive to small shifts of the ramp; long means the ' +
+       'model believes profiles anywhere in the box tell it about each other. ' +
+       'Reported only by the shape-aware kernels.',
   locked: 'Set once, at creation, and never changed underneath a running campaign. ' +
        'A campaign fitted under one kernel and refitted under another is not the ' +
        'same campaign, so the choice is written to the Config sheet and stays.',

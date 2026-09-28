@@ -27,8 +27,9 @@ GRID_N = 512
 GRID_SEED = 20260805
 
 
-def make_reference_grid(n: int = GRID_N, seed: int = GRID_SEED) -> np.ndarray:
-    """One fixed feasible grid. Four columns, always.
+def make_reference_grid(n: int = GRID_N, seed: int = GRID_SEED,
+                        space: S.Space = S.RAMP4) -> np.ndarray:
+    """One fixed feasible grid, one column per parameter of the space.
 
     Run order is NOT part of the grid - the grid is a set of METHODS, not of
     moments. When run order is modelled the posterior is evaluated over this
@@ -37,9 +38,9 @@ def make_reference_grid(n: int = GRID_N, seed: int = GRID_SEED) -> np.ndarray:
     from scipy.stats import qmc
     m = 10
     while True:
-        pts = qmc.Sobol(d=4, scramble=True, seed=seed).random_base2(m)
-        U = S.P4_LOWER + pts * (S.P4_UPPER - S.P4_LOWER)
-        keep = np.array([S.check4(u)[0] for u in U])
+        pts = qmc.Sobol(d=space.d, scramble=True, seed=seed).random_base2(m)
+        U = space.from_norm(pts)
+        keep = space.mask(U)
         if keep.sum() >= n:
             return U[keep][:n]
         m += 1
@@ -67,23 +68,24 @@ def slice_posteriors(fit, incumbent_u, tested_u=None, tested_y=None,
     the panel shows honestly where the design space actually ends - for a low
     start_phi much of the end_phi axis is reachable, for a high one it is not.
     """
+    sp = fit.space
     inc = np.asarray(incumbent_u, dtype=float).ravel()
-    S.require_feasible(inc, "incumbent")
+    sp.require_feasible(inc, "incumbent")
     tested_u = None if tested_u is None else np.atleast_2d(np.asarray(tested_u, float))
     tested_y = None if tested_y is None else np.asarray(tested_y, float).ravel()
 
     panels: list[SlicePanel] = []
-    for j, name in enumerate(S.P4_NAMES):
-        vals = np.linspace(S.P4_LOWER[j], S.P4_UPPER[j], n)
+    for j, name in enumerate(sp.names):
+        vals = np.linspace(sp.lower[j], sp.upper[j], n)
         U = np.tile(inc, (n, 1))
         U[:, j] = vals
-        bad = np.array([not S.check4(u)[0] for u in U])
+        bad = ~sp.mask(U)
         # evaluate everywhere; the mask tells the UI what to grey out
         mu, sd = O.posterior(fit, U, run_order=run_order)
         panels.append(SlicePanel(
             name=name, values=vals, mean=mu, sd=sd,
             lower=mu - 2 * sd, upper=mu + 2 * sd,
-            pinned_at={nm: float(inc[k]) for k, nm in enumerate(S.P4_NAMES) if k != j},
+            pinned_at={nm: float(inc[k]) for k, nm in enumerate(sp.names) if k != j},
             tested=(tested_u[:, j] if tested_u is not None else np.array([])),
             tested_scores=(tested_y if tested_y is not None else np.array([])),
             infeasible=bad))
@@ -125,7 +127,8 @@ class UncertaintyStep:
 
 def uncertainty_step(train_u, train_y, sigma_crf=None, grid=None, new_u=None,
                      run_order=None, model_run_order: bool = False,
-                     kernel: str = O.DEFAULT_KERNEL) -> Optional[UncertaintyStep]:
+                     kernel: str = O.DEFAULT_KERNEL,
+                     space: S.Space = S.RAMP4) -> Optional[UncertaintyStep]:
     """Refit on 1..k-1 and 1..k, and report what the k-th measurement bought.
 
     Both fits use the SAME sigma_crf so a change in the reported numbers comes
@@ -142,14 +145,15 @@ def uncertainty_step(train_u, train_y, sigma_crf=None, grid=None, new_u=None,
     k = y.size
     if k < 3:
         return None
-    grid = make_reference_grid() if grid is None else grid
+    grid = make_reference_grid(space=space) if grid is None else grid
     ro = None if run_order is None else np.asarray(run_order, dtype=float).ravel()
     now = float(ro[k - 1]) if ro is not None else None
 
     before = O.fit_gp(U[:k - 1], y[:k - 1], sigma_crf,
                       None if ro is None else ro[:k - 1], model_run_order,
-                      kernel=kernel)
-    after = O.fit_gp(U, y, sigma_crf, ro, model_run_order, kernel=kernel)
+                      kernel=kernel, space=space)
+    after = O.fit_gp(U, y, sigma_crf, ro, model_run_order, kernel=kernel,
+                     space=space)
 
     mu0, sd0 = O.posterior(before, grid, run_order=now)
     mu1, sd1 = O.posterior(after, grid, run_order=now)
@@ -161,7 +165,9 @@ def uncertainty_step(train_u, train_y, sigma_crf=None, grid=None, new_u=None,
     _, sn0 = O.posterior(before, nu, run_order=now)
     _, sn1 = O.posterior(after, nu, run_order=now)
 
-    names = O.model_names(model_run_order)
+    # The names come from the fitted module, not from the input list: a
+    # shape-aware kernel reports `shape` beside duration and temperature.
+    names = after.lengthscale_names or O.model_names(model_run_order, space)
     ls = np.resize(after.lengthscales, len(names))
     return UncertaintyStep(
         n_runs=k,

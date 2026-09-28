@@ -240,10 +240,10 @@ def pdf(c: Campaign, out_path: Optional[str] = None) -> str:
             ("what was optimised", [
                 "  CRF = n_clean_peaks x (1 - hump_time_fraction) ^ 2",
                 *_wrap("Objective version", cfg.get("crf_version", "")),
-                *_wrap("Design space", ", ".join(
+                *_wrap("Design space", f"{c.space().label}: " + ", ".join(
                     f"{n} [{lo:g}, {hi:g}]" for n, lo, hi
-                    in zip(S.P4_NAMES, S.P4_LOWER, S.P4_UPPER))),
-                *_wrap("Constraint", f"end_phi >= start_phi + {S.MIN_SPAN}"),
+                    in zip(c.space().names, c.space().lower, c.space().upper))),
+                *_wrap("Constraint", "; ".join(k.label for k in c.space().constraints)),
                 *_wrap("Surrogate", f"SingleTaskGP, {c.kernel()} kernel, "
                                     f"BoTorch priors, Standardize(m=1)"),
                 *_wrap("Acquisition", cfg.get("acquisition", "")),
@@ -316,14 +316,14 @@ def pdf(c: Campaign, out_path: Optional[str] = None) -> str:
                 for s in ("top", "right"):
                     ax.spines[s].set_visible(False)
                 drawn = True
-                grad = S.gradient_table(S.abs_to_4param(row))
+                grad = S.space_for_row(row).gradient_table(S.space_for_row(row).from_abs(row))
                 lines = [f"  {g['time_min']:>6.2f} min   {g['pct_b']:>6.2f} %B   "
                          f"{g['phase']}" for g in grad]
-                u = S.abs_to_4param(row)
+                u = S.space_for_row(row).from_abs(row)
                 fig.text(0.07, 0.47, "THE METHOD THAT PRODUCED IT", fontsize=8.5,
                          weight="bold", color="#55635B", va="top")
                 y = 0.445
-                extra = [f"  temperature   {float(u[3]):.1f} C",
+                extra = [f"  temperature   {float(u[-1]):.1f} C",
                          f"  recorded at run {row.get('run_order')}",
                          f"  picker tuned for this run: "
                          f"{SH.truthy(row.get('picker_deviates'))}",
