@@ -53,8 +53,8 @@ function CampaignCard({ c, onOpen, onDuplicate, onReveal, onArchive }) {
         <Tile label="budget" value={`${c.runs_used}/${c.run_budget}`}
               note={c.finished ? 'closed' : c.budget_state === 'EXHAUSTED' ? 'spent' : `${plural(c.methods_left, 'method')} left`} />
         <Tile label="best CRF" term="CRF" value={f(c.best_crf)} note={c.best_method ? `at ${c.best_method}` : '—'} />
-        <Tile label="next" value={c.finished ? 'closed' : c.next_is === 'reference' ? 'check' : 'method'}
-              note={c.finished ? '' : c.next_is === 'reference' ? 'an instrument check' : 'a proposed method'} />
+        <Tile label="next" value={c.finished ? 'closed' : c.drift === 'HALT' ? 'stopped' : c.next_is === 'reference' ? 'check' : 'method'}
+              note={c.finished ? '' : c.drift === 'HALT' ? 'service the instrument' : c.next_is === 'reference' ? (c.awaiting_anchor ? 'the new block’s anchor' : 'an instrument check') : 'a proposed method'} />
       </div>
       <div className="row" style={{ gap: 6, marginBottom: 12 }}>
         {o.space_label && <Tag title="design space">{o.space_label}</Tag>}
@@ -205,11 +205,11 @@ function Wizard({ opts, folder, onPickFolder, onCreate, busy, err }) {
           {step === 1 && (
             <div>
               <h3>What this campaign is</h3>
-              <p className="muted">The six fields marked <Term k="material">material</Term> say what the runs are measurements <i>of</i>. They can be corrected later, but changing one after runs are recorded needs a reason, because it decides whether the earlier and later runs are the same experiment.</p>
+              <p className="muted">Sample, column, mobile phase, flow rate, detector and instrument are <Term k="material">material</Term>: they say what the runs are measurements <i>of</i>. Any of these can be corrected later, but changing one after runs are recorded needs a reason, because it decides whether the earlier and later runs are the same experiment.</p>
               <div className="grid g2">
                 {INFO_FIELDS.map(([k, label, ph]) => (
                   <Field key={k} label={label} error={k === 'name' && !info.name.trim() && step > 1 ? 'required' : ''}
-                         help={['sample', 'column', 'mobile_phase', 'instrument', 'flow_rate', 'detector'].includes(k) ? 'material' : (k === 'name' ? 'names the folder' : '')}>
+                         help={k === 'name' ? 'names the folder' : ''}>
                     <input value={info[k]} placeholder={ph} onChange={(e) => setInfo({ ...info, [k]: e.target.value })} />
                   </Field>
                 ))}

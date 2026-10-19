@@ -289,7 +289,10 @@ def create_app() -> Flask:
             "drift": {"verdict": v.verdict, "reasons": v.reasons,
                       "actions": v.actions(), "n": v.n,
                       "anchor": v.anchor, "last": v.last, "delta": v.delta,
-                      "blocks": v.blocks_proposing},
+                      "blocks": v.blocks_proposing,
+                      "block": v.block, "awaiting_anchor": v.awaiting_anchor,
+                      "previous_anchor": v.previous_anchor},
+            "service": c.blocks(),
             "schedule": {"next_is": sch.next_is, "anchor": sch.anchor,
                          "since": sch.methods_since, "overdue": sch.overdue,
                          "reason": sch.reason, "blocks": sch.blocks_proposing},
@@ -382,6 +385,15 @@ def create_app() -> Flask:
         st = current().reopen(b.get("reason"))
         return ok({"budget": st.as_dict(),
                    "next": L.next_step(current()).__dict__})
+
+    @app.post("/api/campaign/service")
+    def service_instrument():
+        """The instrument was serviced: close the block, re-anchor next."""
+        b = request.get_json(silent=True) or {}
+        c = current()
+        ev = c.service(b.get("reason"))
+        return ok({"event": ev, "blocks": c.blocks(),
+                   "next": L.next_step(c).__dict__})
 
     @app.get("/api/jobs/<job_id>")
     def job_status(job_id):
@@ -496,12 +508,13 @@ def create_app() -> Flask:
     @app.get("/api/reference")
     def reference_series():
         c = current()
-        refs = c.references()
         v = c.verdict()
         lim = c.drift_limits()
         return ok({"series": [{"run_order": r.run_order, "crf": r.crf,
-                               "name": r.name} for r in refs],
-                   "verdict": v.verdict, "anchor": v.anchor,
+                               "name": r.name, "block": i}
+                              for i, (_, refs) in enumerate(c.reference_blocks())
+                              for r in refs],
+                   "verdict": v.verdict, "anchor": v.anchor, "block": v.block,
                    "watch": lim["watch"], "halt": lim["halt"],
                    "slope": v.slope, "reasons": v.reasons})
 
@@ -588,19 +601,25 @@ def create_app() -> Flask:
     def drift_page():
         """Everything the instrument page needs, in one call."""
         c = current()
-        refs = c.references()
         v = c.verdict()
         inc = c.incumbent()
-        readings = H.channel_reports(c.reference_rows())
+        # The channels read the CURRENT block: across a service, anchor and
+        # latest would be two different instruments.
+        readings = H.channel_reports(c.reference_rows(current_only=True))
         return ok({
-            "series": [{"run_order": r.run_order, "crf": r.crf, "name": r.name}
+            "series": [{"run_order": r.run_order, "crf": r.crf, "name": r.name,
+                        "block": i}
+                       for i, (_, refs) in enumerate(c.reference_blocks())
                        for r in refs],
             "verdict": {"verdict": v.verdict, "reasons": v.reasons,
                         "actions": v.actions(), "n": v.n, "anchor": v.anchor,
                         "last": v.last, "delta": v.delta, "slope": v.slope,
                         "intercept": v.intercept, "span": v.span,
                         "implied_fall": v.implied_fall, "monotone": v.monotone,
-                        "rho": v.rho, "blocks": v.blocks_proposing},
+                        "rho": v.rho, "blocks": v.blocks_proposing,
+                        "block": v.block, "awaiting_anchor": v.awaiting_anchor,
+                        "previous_anchor": v.previous_anchor},
+            "service": c.blocks(),
             "limits": c.drift_limits(),
             "schedule": {"next_is": c.schedule().next_is,
                          "since": c.schedule().methods_since,

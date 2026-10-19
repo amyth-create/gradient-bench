@@ -9,6 +9,6 @@ API can sit on top of them.
 Nothing here imports Flask or knows about HTTP. `scripts/replay_corpus.py`
 exercises the whole thing headless.
 """
-__version__ = "1.1.0"
-APP_VERSION = "1.1.0"
+__version__ = "1.2.0"
+APP_VERSION = "1.2.0"
 VERSION_TAG = "version 3"

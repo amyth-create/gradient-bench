@@ -5,6 +5,7 @@ import Term from '../components/Term.jsx'
 import Icon from '../components/Icon.jsx'
 import Chromatogram from '../components/Chromatogram.jsx'
 import { Banner, Busy, Err, Tag, Meter, GradientTable, Field, NumberSlider, Tile } from '../components/ui.jsx'
+import ServiceActions from '../components/ServiceActions.jsx'
 
 /* ── one picker threshold: slider + number, effect text, delta ────────── */
 const RANGES = {
@@ -195,7 +196,7 @@ export default function Run({ st, reload, setTab }) {
   const blocked = st.next.blocked
   const halted = st.next.action === 'halted'
   const stepTitle = p
-    ? (p.kind === 'reference' ? (p.phase === 'anchor' ? 'Instrument-check method — the anchor' : 'Instrument-check method')
+    ? (p.kind === 'reference' ? (p.phase === 'anchor' ? (st.drift.block > 0 ? 'Instrument-check method — the new block’s anchor' : 'Instrument-check method — the anchor') : 'Instrument-check method')
        : p.phase === 'cold_start' ? `Exploring method${p.seed_index ? ` ${p.seed_index}` : ''}` : 'The model’s next method')
     : blocked ? 'Nothing to run right now' : st.next.title
   const blockedNext = b?.finished
@@ -224,12 +225,13 @@ export default function Run({ st, reload, setTab }) {
         </Banner>
       )}
       {halted && (
-        <Banner kind="HALT" eyebrow="instrument check" title="Stopped — the instrument needs attention" actions={st.drift.actions} role="alert">
+        <Banner kind="HALT" eyebrow="instrument check" title="Stopped — the instrument needs attention" actions={st.drift.actions} role="alert"
+                form={<ServiceActions reload={reload} />}>
           <p>{st.drift.reasons.join(' ')}</p>
         </Banner>
       )}
       {!halted && !blocked && st.drift.verdict === 'WATCH' && (
-        <Banner kind="WATCH" eyebrow="instrument check" title={st.drift.n ? 'Watch: the reference has moved' : 'Watch: drift is unmeasured until the anchor is run'}>
+        <Banner kind="WATCH" eyebrow="instrument check" title={st.drift.awaiting_anchor ? 'Serviced — the instrument check anchors the new block' : st.drift.n ? 'Watch: the reference has moved' : 'Watch: drift is unmeasured until the anchor is run'}>
           <p>{st.drift.reasons.join(' ')}</p>
         </Banner>
       )}

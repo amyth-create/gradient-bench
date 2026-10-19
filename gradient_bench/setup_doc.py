@@ -525,6 +525,17 @@ def build(c: Campaign) -> dict[str, Any]:
         _row("Monotone rule", f"{int(float(cfg.get('drift_monotone_k', D.MONOTONE_K)))} "
                               f"consecutive falls -> HALT"),
         _row("References recorded", len(c.references())),
+        _row("Blocks", len(c.blocks()),
+             "a new block opens each time the instrument is serviced; the "
+             "chart, its limits and the monotone rule restart from that "
+             "block's anchor, and the block before stays on the record "
+             "uncorrected", term="block"),
+    ] + [
+        _row(f"Serviced (opened block {int(e.get('block', i + 2))})",
+             f"after run {int(e.get('after_run_order', 0))}",
+             str(e.get("reason", "")))
+        for i, e in enumerate(c.service_history())
+    ] + [
         _row("Current verdict", v.verdict, " ".join(v.reasons)),
         _row("Drift-adjusted scores",
              "on" if str(cfg.get("use_drift_adjusted", "false")).lower() == "true"

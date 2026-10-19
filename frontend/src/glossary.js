@@ -79,8 +79,9 @@ export const TERMS = {
   // ── the instrument ───────────────────────────────────────────────────
   'reference run': 'One fixed method re-run on a schedule. Its movement can only be ' +
        'the instrument, so it separates instrument drift from chemistry.',
-  anchor: 'The first reference run, measured before anything else. Every later ' +
-       'reference is a difference from it, which is why it cannot be added later.',
+  anchor: 'The first reference run of a block, measured before anything else in it. ' +
+       'Every later reference in the block is a difference from it, which is why it ' +
+       'cannot be added later. Servicing the instrument opens a new block with its own anchor.',
   cadence: 'How often the instrument-check method comes round - one reference every ' +
        'N proposals. ENFORCED, not advised: when a reference is due the loop will ' +
        'not serve a design method until it has been run.',
@@ -96,6 +97,9 @@ export const TERMS = {
   monotone: 'Falling every time, with no recovery. Three consecutive falls is a ' +
        'HALT even if none of them is individually large, because a steady decline ' +
        'is a different thing from scatter.',
+  block: 'The stretch of a campaign between services of the instrument. Each block has ' +
+       'its own anchor, and the control chart, its limits and the monotone rule restart ' +
+       'there. Earlier blocks stay on the record and are never corrected across the boundary.',
   'drift-adjusted': 'The score with the reference’s movement subtracted, so runs ' +
        'from different days can be compared. It assumes the drift is REVERSIBLE and ' +
        'nothing can check that - correcting an irreversibly degraded column gives ' +

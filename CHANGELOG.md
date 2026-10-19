@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.2.0 — a way out of a HALT, and quieter metadata (2026-10-19)
+
+### The science
+
+- **A HALT now has an exit.** Before, a HALT blocked proposing and nothing could lift it:
+  the cadence had just been met, so no reference was due, and any reference that did run
+  was compared to the same anchor the instrument could no longer reach. Now the analyst
+  records that the instrument was **serviced**, with a reason, and the next instrument check
+  anchors a **new block**. The verdict, the schedule and the health channels read the current
+  block only: the chart, its limits and the monotone rule restart from the new anchor, and
+  the monotone rule never counts a fall across a service. Everything before the service
+  stays on the record as its own block — charted against its own anchor, never corrected
+  across the boundary. A service is refused while a run is on the instrument (it belongs to
+  the block that is closing) and when the current block has no anchor yet. It is not gated
+  on the verdict: a column replaced on a PASS is still a new instrument state.
+- **Drift adjustment is per block.** Each run is corrected against its own block's anchor;
+  a baseline is never interpolated through a service.
+
+### The app
+
+- On a HALT the Run and Instrument tabs carry the service form; the control chart draws a
+  boundary at every service and the Instrument tab lists the service record.
+- The new-campaign wizard and the Setup tab no longer caption each metadata box *material*;
+  the sentence above the boxes names the six fields that are, and a material change still
+  asks for a reason.
+- The export's reference series carries a `block` column with each run's delta from its own
+  block's anchor; the PDF chart marks services; the Method page prints the service record.
+
+### Compatibility
+
+Campaign folders written by 1.0.0 and 1.1.0 open unchanged: a folder without a
+`service_history` field is one block. The Data sheet's schema does not change.
+
 ## 1.1.0 — version 3: a second design space and shape-aware surrogates (2026-09-15)
 
 After Boelrijk, Detlefsen, Dürholt and Haas, *Shape-aware Gaussian process kernels for

@@ -80,6 +80,16 @@ class DriftVerdict:
     implied_fall: float = float("nan")
     monotone: bool = False
     reasons: list[str] = field(default_factory=list)
+    #: Which BLOCK this verdict is read in. Block 0 is the campaign as created;
+    #: every service of the instrument opens another, and the chart, its
+    #: limits and the monotone rule restart from that block's anchor.
+    block: int = 0
+    #: The anchor of the block before this one, when there is one. Reported,
+    #: never gated on: a new anchor well below the old one says the service
+    #: did not restore the instrument, and that is the analyst's to judge.
+    previous_anchor: float = float("nan")
+    #: The instrument was serviced and the new block has no reference yet.
+    awaiting_anchor: bool = False
 
     @property
     def blocks_proposing(self) -> bool:
@@ -104,9 +114,11 @@ class DriftVerdict:
                 "STOP PROPOSING AND SERVICE THE INSTRUMENT.",
                 "Fresh mobile phase; re-equilibrate or replace the column; check "
                 "injection volume and vial age; let the column oven settle.",
-                "Then re-anchor with a new reference run and treat everything "
-                "before the service as a SEPARATE BLOCK - not as data to be "
-                "corrected.",
+                "Then record that it was serviced - the form under this notice, "
+                "with a reason - and run the instrument-check method again. It "
+                "anchors a NEW BLOCK: the chart, its limits and the monotone "
+                "rule restart from it, and everything before the service stays "
+                "on the record as a SEPARATE BLOCK - not as data to be corrected.",
                 "Do not lower the threshold to make the chart pass.",
             ],
         }[self.verdict]
@@ -134,19 +146,40 @@ def fit_reference_trend(refs: Sequence[ReferenceRun]):
 def drift_verdict(refs: Sequence[ReferenceRun],
                   watch_delta: float = WATCH_DELTA,
                   halt_delta: float = HALT_DELTA,
-                  k: int = MONOTONE_K) -> DriftVerdict:
-    """PASS / WATCH / HALT from the reference series.
+                  k: int = MONOTONE_K, *,
+                  block: int = 0,
+                  previous_anchor: float = float("nan"),
+                  serviced: Optional[dict] = None) -> DriftVerdict:
+    """PASS / WATCH / HALT from the reference series OF ONE BLOCK.
 
     NO REFERENCE IS NOT A PASS. With nothing measured, g(t) is unmeasured, and
     an unmeasured confound is a WATCH, not a clean bill of health.
+
+    `refs` must be the current block's references only - the caller splits
+    them (`split_blocks`). A reference from before a service is a measurement
+    of a different instrument state; comparing the new one to it is exactly
+    the mistake a block boundary exists to prevent. `serviced` is the service
+    event that opened this block, when the block has no anchor yet, so the
+    verdict can say what to do rather than "no reference exists".
     """
     n = 0 if refs is None else len(refs)
-    v = DriftVerdict(verdict="PASS", n=n)
+    v = DriftVerdict(verdict="PASS", n=n, block=int(block),
+                     previous_anchor=float(previous_anchor))
     if n == 0:
         v.verdict = "WATCH"
-        v.reasons.append(
-            "No reference run exists, so instrument drift is UNMEASURED. That is "
-            "not a pass. Run the t = 0 anchor before anything else.")
+        if serviced:
+            v.awaiting_anchor = True
+            why = serviced.get("reason", "")
+            v.reasons.append(
+                f"The instrument was serviced after run "
+                f"{int(serviced.get('after_run_order', 0))}"
+                f"{(' (' + str(why) + ')') if why else ''}. This block has no "
+                f"anchor yet: run the instrument-check method before anything "
+                f"else. Nothing is proposed until it is recorded.")
+        else:
+            v.reasons.append(
+                "No reference run exists, so instrument drift is UNMEASURED. "
+                "That is not a pass. Run the t = 0 anchor before anything else.")
         return v
 
     ro, y = _series(refs)
@@ -156,6 +189,14 @@ def drift_verdict(refs: Sequence[ReferenceRun],
         v.reasons.append(
             f"Anchor only (n = 1): the chart has a zero but no trend yet. The "
             f"next reference is due after {REFERENCE_EVERY} proposals.")
+        if block > 0 and np.isfinite(v.previous_anchor):
+            d = v.anchor - v.previous_anchor
+            v.reasons.append(
+                f"Block {block + 1} is anchored at {v.anchor:.2f} CRF; the block "
+                f"before the service was anchored at {v.previous_anchor:.2f} "
+                f"({d:+.2f}). The chart restarts from this zero. The comparison "
+                f"is for you - a new anchor far below the old one says the "
+                f"service did not restore the instrument - and it gates nothing.")
         return v
 
     slope, intercept, rho = fit_reference_trend(refs)
@@ -237,6 +278,52 @@ def drift_adjust(crf, run_order, refs: Sequence[ReferenceRun]) -> np.ndarray:
     return np.asarray(crf, dtype=float) - drift_offset(run_order, refs)
 
 
+# ── blocks: the campaign between services of the instrument ─────────────────
+Block = tuple[float, list[ReferenceRun]]      # (starts after run, references)
+
+
+def split_blocks(refs: Optional[Sequence[ReferenceRun]],
+                 starts: Sequence[float]) -> list[Block]:
+    """The reference runs grouped into blocks.
+
+    `starts` is the run position each block begins AFTER - 0 for the first,
+    then the last run recorded before each service. A reference belongs to
+    the block whose start it follows. Every block is returned, in campaign
+    order, even one with no reference yet: that empty block is the state
+    "serviced, not yet re-anchored", and it has to be visible.
+    """
+    r = sorted(refs or [], key=lambda x: x.run_order)
+    st = [float(s) for s in starts] or [0.0]
+    out: list[Block] = []
+    for i, s in enumerate(st):
+        e = st[i + 1] if i + 1 < len(st) else float("inf")
+        out.append((s, [x for x in r if s < x.run_order <= e]))
+    return out
+
+
+def drift_offset_blocks(run_order, blocks: Sequence[Block]) -> np.ndarray:
+    """`drift_offset`, one block at a time.
+
+    Every run is corrected against the anchor of ITS OWN block and never
+    across a service: the instrument on the far side of a service is a
+    different instrument, and interpolating a baseline through the boundary
+    would smear the service over every run near it. A run in a block with no
+    reference yet gets no correction - zero, not the previous block's.
+    """
+    q = np.asarray(run_order, dtype=float)
+    out = np.zeros(q.shape, dtype=float)
+    for i, (s, refs) in enumerate(blocks):
+        e = blocks[i + 1][0] if i + 1 < len(blocks) else float("inf")
+        m = (q > s) & (q <= e)
+        if m.any() and refs:
+            out[m] = drift_offset(q[m], refs)
+    return out
+
+
+def drift_adjust_blocks(crf, run_order, blocks: Sequence[Block]) -> np.ndarray:
+    return np.asarray(crf, dtype=float) - drift_offset_blocks(run_order, blocks)
+
+
 @dataclass
 class Incumbent:
     n: int
@@ -260,8 +347,11 @@ class Incumbent:
                 f"either as the incumbent.")
 
 
-def best_so_far(scores, run_orders, names, refs: Sequence[ReferenceRun]) -> Incumbent:
+def best_so_far(scores, run_orders, names, refs: Sequence[ReferenceRun],
+                blocks: Optional[Sequence[Block]] = None) -> Incumbent:
     """Incumbent, raw and drift-adjusted. Chooses nothing; reports both.
+    With `blocks` the adjustment is per block (`drift_adjust_blocks`); without
+    it the whole series is one block, as before services existed.
 
     The phantom flag fires when the two argmaxes name DIFFERENT methods. That
     is the failure that matters: an early run carrying a drift bonus that
@@ -276,7 +366,12 @@ def best_so_far(scores, run_orders, names, refs: Sequence[ReferenceRun]) -> Incu
         return Incumbent(0, n_ref, float("nan"), None, float("nan"),
                          float("nan"), None, float("nan"), float("nan"), False)
     i_raw = int(np.nanargmax(y))
-    ya = drift_adjust(y, ro, refs) if n_ref else y.copy()
+    if not n_ref:
+        ya = y.copy()
+    elif blocks is not None:
+        ya = drift_adjust_blocks(y, ro, blocks)
+    else:
+        ya = drift_adjust(y, ro, refs)
     i_adj = int(np.nanargmax(ya))
     return Incumbent(
         n=int(y.size), n_ref=n_ref,
@@ -308,19 +403,30 @@ class Schedule:
 
 
 def reference_schedule(n_methods_total: int, methods_since_last_reference: int,
-                       n_ref: int, every: int = REFERENCE_EVERY) -> Schedule:
+                       n_ref: int, every: int = REFERENCE_EVERY,
+                       serviced: Optional[dict] = None) -> Schedule:
     """Is the next thing on the instrument a reference or a proposal?
 
     Counts PROPOSALS (distinct methods), not runs, so `every = 5` with two
     replicates means one reference per ten design runs.
     """
     if n_ref == 0:
+        # `n_ref` is the CURRENT BLOCK's count. After a service it is zero
+        # again and the schedule demands an anchor exactly as on day one -
+        # that is the whole mechanism by which a service re-anchors.
+        if serviced:
+            reason = (f"The instrument was serviced after run "
+                      f"{int(serviced.get('after_run_order', 0))}. The new block "
+                      f"has no anchor yet, so the instrument-check method comes "
+                      f"BEFORE any design method - every later reference in the "
+                      f"block is a difference from it.")
+        else:
+            reason = ("No reference has been run yet. The t = 0 ANCHOR must be "
+                      "measured BEFORE the cold-start seeds - without it every "
+                      "later reference is a difference from nothing.")
         return Schedule(
             next_is="reference", anchor=True, n_ref=0, n_methods=n_methods_total,
-            methods_since=n_methods_total, overdue=0,
-            reason="No reference has been run yet. The t = 0 ANCHOR must be "
-                   "measured BEFORE the cold-start seeds - without it every later "
-                   "reference is a difference from nothing.")
+            methods_since=n_methods_total, overdue=0, reason=reason)
     due = methods_since_last_reference >= every
     return Schedule(
         next_is="reference" if due else "proposal", anchor=False, n_ref=n_ref,

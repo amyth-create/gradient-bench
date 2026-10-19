@@ -100,7 +100,7 @@ Confirm the install before trusting it:
 
 ```bash
 python -m gradient_bench.scripts.verify_install    # says what is missing and what to do
-python -m pytest gradient_bench/tests -q           # expect 148 passed
+python -m pytest gradient_bench/tests -q           # expect 153 passed
 ```
 
 **Keep the workbook closed while the app is recording.** A campaign's
@@ -332,9 +332,12 @@ that is the entire reason it exists.
 ![The Instrument tab](docs/screenshots/06-instrument.png)
 
 Measured against the t = 0 anchor: **WATCH** at 1.5 CRF below it, **HALT** at 3.0 below, or
-at three consecutive falls. On a halt the app stops proposing and tells you to service the
-instrument and re-anchor, treating everything before the service as a separate block — not
-as data to be corrected.
+at three consecutive falls. On a halt the app stops proposing — nothing is served until the
+instrument has been dealt with. Once it has, you record that it was **serviced**, with a
+reason, and the next instrument check anchors a **new block**: the chart, its limits and the
+monotone rule restart from it. Everything before the service stays on the record as a
+separate block, charted against its own anchor — not as data to be corrected, and never
+compared across the boundary.
 
 Six diagnostic channels (peak width, tailing, retention, signal and area, baseline and
 noise, acquisition) are read from the reference runs only, and each reading is offered as a
@@ -380,7 +383,7 @@ gradient_bench/          the app
   store/campaign.py      a campaign is a folder; the workbook is its record
   api/app.py             the Flask API and the pre-built frontend
   scripts/               verify_install, replay_corpus (headless)
-  tests/                 148 tests, including golden files
+  tests/                 153 tests, including golden files
 frontend/                React source (Vite): tabs/, components/, styles/
 testdata/                21 real chromatograms and their sheet
 docs/screenshots/        the images in this README
@@ -393,7 +396,7 @@ picker, edit the copy in `core/` and re-run the tests.
 ## Tests
 
 ```bash
-python -m pytest gradient_bench/tests -q                    # 148 passed
+python -m pytest gradient_bench/tests -q                    # 153 passed
 python -m gradient_bench.scripts.replay_corpus --trace-dir testdata/traces
 ```
 

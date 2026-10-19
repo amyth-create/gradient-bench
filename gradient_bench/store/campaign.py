@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 
 from . import sheet as SH
+from . import state as ST
 from ..core import budget as B
 from ..core import drift as D
 from ..core import optimiser as O
@@ -76,6 +77,14 @@ BUDGET_HISTORY_FIELD = "budget_history"
 FINISHED_FIELD = "finished"
 ENDED_AT_FIELD = "ended_at"
 END_REASON_FIELD = "end_reason"
+
+#: The instrument's service record. Each entry closes a BLOCK: the control
+#: chart, its limits and the monotone rule restart from the next reference,
+#: which anchors the new block. Everything before the service is read as a
+#: separate block - charted against its own anchor, never corrected across
+#: the boundary, never discarded. A HALT has exactly one exit, and this is it.
+SERVICE_HISTORY_FIELD = "service_history"
+EVENT_SERVICED = "serviced"
 
 
 def _truthy(v: Any) -> bool:
@@ -418,6 +427,93 @@ class Campaign:
         })
         return self.budget()
 
+    # ── the service record, and the blocks it divides the campaign into ─
+    def service_history(self) -> list[dict[str, Any]]:
+        raw = self.info().get(SERVICE_HISTORY_FIELD)
+        try:
+            out = json.loads(raw) if isinstance(raw, str) and raw.strip() else []
+        except Exception:
+            out = []
+        return [e for e in out if isinstance(e, dict)]
+
+    def last_service(self) -> Optional[dict[str, Any]]:
+        h = self.service_history()
+        return h[-1] if h else None
+
+    def _block_starts(self) -> list[float]:
+        return [0.0] + [float(e.get("after_run_order", 0))
+                        for e in self.service_history()]
+
+    def reference_blocks(self) -> list[D.Block]:
+        """Every block's references, in campaign order: (starts after run,
+        references). The last entry is the current block, possibly empty."""
+        return D.split_blocks(self.references(), self._block_starts())
+
+    def current_references(self) -> list[D.ReferenceRun]:
+        """The CURRENT block's references - what the verdict, the schedule
+        and the health channels read. `references()` is every block."""
+        return self.reference_blocks()[-1][1]
+
+    def blocks(self) -> list[dict[str, Any]]:
+        """The blocks as the interface and the export see them."""
+        hist = self.service_history()
+        out = []
+        for i, (s, refs) in enumerate(self.reference_blocks()):
+            ev = hist[i - 1] if i > 0 else {}
+            out.append({"index": i, "after_run_order": s,
+                        "serviced_at": ev.get("at", ""),
+                        "reason": ev.get("reason", ""),
+                        "n_ref": len(refs),
+                        "anchor": (float(refs[0].crf) if refs else None),
+                        "refs": [r.name for r in refs]})
+        return out
+
+    def service(self, reason: str) -> dict[str, Any]:
+        """Record that the instrument was serviced, and open a new block.
+
+        THE ONLY WAY OUT OF A HALT. A HALT says the reference has moved too
+        far from its anchor to trust what the instrument produces. Lowering
+        the limit makes the chart pass without making the instrument right;
+        running the reference again inside the same block compares it to an
+        anchor the instrument may no longer be able to reach, and a column
+        that was replaced has no business being compared to the old one at
+        all. So the analyst fixes the instrument, says so here, and the next
+        instrument check anchors a NEW block. Nothing before it is corrected
+        or discarded: it stays on the record as a separate block, charted
+        against its own anchor.
+
+        Not gated on the verdict: a column replaced on a PASS is still a new
+        instrument state and still wants a new anchor (`health.py` says so).
+        Refused while a run is on the instrument - it was proposed in the
+        block that is closing, and recording it first keeps the workbook
+        agreeing with what the instrument did - and refused when the current
+        block has no anchor yet, because there is nothing to close.
+        """
+        reason = B.validate_reason(reason, "servicing the instrument")
+        pend = ST.load(self.state_path)
+        if pend is not None and pend.u is not None:
+            raise ValueError(
+                "A run is still on the instrument. Record it or discard it "
+                "first: it was proposed before the service, so it belongs to "
+                "the block that is closing.")
+        if not self.current_references():
+            if self.references():
+                raise ValueError(
+                    "The instrument was already serviced and the new block has "
+                    "no anchor yet. Run the instrument-check method - it "
+                    "anchors the block - before recording another service.")
+            raise ValueError(
+                "No reference has been run yet, so there is no block to close. "
+                "Run the anchor first.")
+        ev = B.event(EVENT_SERVICED, used=self.n_methods(), reason=reason)
+        ev["after_run_order"] = int(SH.next_run_order(self.data()) - 1)
+        ev["block"] = len(self.service_history()) + 1
+        ev["verdict_before"] = self.verdict().verdict
+        self._update_info({
+            SERVICE_HISTORY_FIELD: json.dumps(self.service_history() + [ev]),
+        })
+        return ev
+
     # ── derived campaign state ──────────────────────────────────────────
     def design(self) -> pd.DataFrame:
         df = self.data()
@@ -474,13 +570,16 @@ class Campaign:
         return int(d["method"].map(SH.method_base).nunique()) if len(d) else 0
 
     def schedule(self) -> D.Schedule:
+        cur = self.current_references()
         return D.reference_schedule(
             n_methods_total=self.n_methods(),
             methods_since_last_reference=self.methods_since_last_reference(),
-            n_ref=len(self.references()),
-            every=self.drift_limits()["every"])
+            n_ref=len(cur),
+            every=self.drift_limits()["every"],
+            serviced=(self.last_service() if (not cur and self.references())
+                      else None))
 
-    def reference_rows(self) -> list[dict[str, Any]]:
+    def reference_rows(self, current_only: bool = False) -> list[dict[str, Any]]:
         """Reference runs, in instrument order, as plain dicts.
 
         The trace-health channels must be read on the REFERENCE series only -
@@ -491,6 +590,11 @@ class Campaign:
         if not len(df):
             return []
         r = df[df["source"] == SH.SOURCE_REFERENCE].sort_values("run_order")
+        if current_only:
+            # The channels compare the latest reference to the block's anchor.
+            # Across a service that comparison is between two instruments.
+            start = self._block_starts()[-1]
+            r = r[pd.to_numeric(r["run_order"], errors="coerce") > start]
         return r.to_dict(orient="records")
 
     def methods(self) -> list[dict[str, Any]]:
@@ -549,10 +653,9 @@ class Campaign:
         d = self.design()
         if not len(d):
             return {}
-        refs = self.references()
         y = pd.to_numeric(d["CRF"], errors="coerce").to_numpy(float)
         ro = pd.to_numeric(d["run_order"], errors="coerce").to_numpy(float)
-        adj = D.drift_adjust(y, ro, refs)
+        adj = D.drift_adjust_blocks(y, ro, self.reference_blocks())
         return {str(m): float(v) for m, v in zip(d["method"], adj)}
 
     def _cfgnum(self, key: str, default: float) -> float:
@@ -579,9 +682,18 @@ class Campaign:
         }
 
     def verdict(self) -> D.DriftVerdict:
+        """The CURRENT block's verdict. Earlier blocks are on the record and
+        on the chart, but a reference from before a service is not compared
+        to one from after it - that is what the service was for."""
         lim = self.drift_limits()
-        return D.drift_verdict(self.references(), watch_delta=lim["watch"],
-                               halt_delta=lim["halt"], k=lim["monotone_k"])
+        blocks = self.reference_blocks()
+        cur = blocks[-1][1]
+        prev = next((float(refs[0].crf) for _, refs in reversed(blocks[:-1]) if refs),
+                    float("nan"))
+        return D.drift_verdict(
+            cur, watch_delta=lim["watch"], halt_delta=lim["halt"],
+            k=lim["monotone_k"], block=len(blocks) - 1, previous_anchor=prev,
+            serviced=(self.last_service() if (not cur and len(blocks) > 1) else None))
 
     def use_drift_adjusted(self) -> bool:
         return _truthy(self.config().get("use_drift_adjusted", "false"))
@@ -596,7 +708,8 @@ class Campaign:
         has converged and adopts the second-best chemistry.
         """
         U, y, names, ro = self.training_set()
-        return D.best_so_far(y, ro, names, self.references())
+        return D.best_so_far(y, ro, names, self.references(),
+                             blocks=self.reference_blocks())
 
     #: Settings the interface may flip directly. Everything else on the Config
     #: sheet is scientific configuration, changed through an operation that
@@ -623,6 +736,7 @@ class Campaign:
         sd, groups, dof = self.sigma_crf()
         sch = self.schedule()
         inc = self.incumbent()
+        v = self.verdict()
         bud = self.budget(need=(0 if sch.next_is == "reference" else 1))
         return {
             "slug": self.slug, "root": self.root,
@@ -644,7 +758,9 @@ class Campaign:
             "phantom": bool(inc.phantom),
             "sigma_crf": (None if not np.isfinite(sd) else float(sd)),
             "sigma_dof": dof,
-            "drift": self.verdict().verdict,
+            "drift": v.verdict,
+            "block": int(v.block), "awaiting_anchor": bool(v.awaiting_anchor),
+            "n_services": len(self.service_history()),
             "next_is": sch.next_is,
             # the budget counts every instrument run, so it is deliberately
             # NOT `n_runs` above, which counts design runs only
@@ -726,6 +842,7 @@ def create(parent_dir: str, info: dict[str, Any], *, reference_method,
     camp[BUDGET_HISTORY_FIELD] = json.dumps(
         [B.event(B.EVENT_CREATED, used=0, to=int(run_budget),
                  reason=f"campaign created with a {run_budget}-method budget")])
+    camp[SERVICE_HISTORY_FIELD] = "[]"
 
     pcfg = dict(P.CAMPAIGN_DEFAULTS)
     pcfg.update(picker_config or {})
