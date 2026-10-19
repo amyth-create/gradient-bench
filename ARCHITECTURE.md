@@ -52,7 +52,7 @@ the very first thing any campaign runs is that check (the "anchor").
 | Peak picking | numpy, scipy, pybaselines | Vendored picker `hplc_picker` 3.0.0, self-contained. |
 | Record | openpyxl / pandas workbook | An `.xlsx` a chemist can open without the app. |
 | Frontend | React 18 + Vite 5, no UI library | Built into `gradient_bench/api/static/`; the Python package ships the built bundle so no Node is needed to run. |
-| Tests | pytest, 147 tests | Golden files against 20 real chromatograms plus unit tests for every layer. |
+| Tests | pytest, 148 tests | Golden files against 20 real chromatograms plus unit tests for every layer. |
 
 Long calls (a GP fit, a picker pass, an export) run as in-process background threads
 (`jobs.py`) that the page polls every 250 ms, so a fit never leaves a button dead.
@@ -99,7 +99,7 @@ v3/
     scripts/
       verify_install.py          11 install checks
       replay_corpus.py           headless end-to-end over the corpus (--kernel)
-    tests/test_core.py           147 tests
+    tests/test_core.py           148 tests
     golden_files.json            adjudicated expectations for the corpus
 ```
 
@@ -229,7 +229,7 @@ locked, like the kernel: a campaign's runs are points in one space.
 |---|---|
 | start_phi | 0.02 – 0.40 (fraction B) |
 | end_phi | 0.10 – 1.00 |
-| duration_min | 10 – 60 min |
+| duration_min | 10 – 30 min |
 | T | 25 – 60 °C |
 
 One constraint, `end_phi ≥ start_phi + 0`. The minimum span is zero on purpose: an isocratic
@@ -592,7 +592,7 @@ Python package runs without Node. The dev server proxies `/api` to port 5051.
 
 ## 16. Testing and scripts
 
-- `python -m pytest gradient_bench/tests -q` — 147 tests. Golden files adjudicate the 20
+- `python -m pytest gradient_bench/tests -q` — 148 tests. Golden files adjudicate the 20
   corpus traces; the space tests check constraint normalisation against the absolute
   definition on random points, the sampler, and round trips through the sheet; the shape
   tests check the distance against quadrature, the metric axioms, vertical steps, the Gram

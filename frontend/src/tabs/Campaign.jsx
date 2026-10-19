@@ -113,7 +113,7 @@ const STEPS = ['Folder', 'Campaign', 'Instrument check', 'Plan', 'Model', 'Revie
 function Wizard({ opts, folder, onPickFolder, onCreate, busy, err }) {
   const [step, setStep] = useState(folder ? 1 : 0)
   const [info, setInfo] = useState(Object.fromEntries(INFO_FIELDS.map(([k]) => [k, ''])))
-  const preset = opts?.reference_presets?.shallow_survey?.u || [0.10, 0.30, 50.0, 45.0]
+  const preset = opts?.reference_presets?.shallow_survey?.u || [0.10, 0.30, 30.0, 45.0]
   const [ref, setRef] = useState(preset)
   const [nrep, setNrep] = useState(2)
   const [nseed, setNseed] = useState(5)
@@ -128,7 +128,7 @@ function Wizard({ opts, folder, onPickFolder, onCreate, busy, err }) {
 
   useEffect(() => { if (folder && step === 0) setStep(1) }, [folder])   // eslint-disable-line
 
-  const lo = opts?.space?.lower || [0.02, 0.10, 10, 25], hi = opts?.space?.upper || [0.40, 1.00, 60, 60]
+  const lo = opts?.space?.lower || [0.02, 0.10, 10, 25], hi = opts?.space?.upper || [0.40, 1.00, 30, 60]
   const refErrors = useMemo(() => {
     const e = {}
     if (!(ref[0] >= lo[0] && ref[0] <= hi[0])) e[0] = `start %B must be between ${lo[0] * 100} and ${hi[0] * 100}`
@@ -225,7 +225,7 @@ function Wizard({ opts, folder, onPickFolder, onCreate, busy, err }) {
                 <div>
                   <div className="row mb2">
                     <button className="sm" onClick={() => setRef(preset)}><Icon name="refresh" />shallow survey preset</button>
-                    <span className="muted small">10→30 %B over 50 min at 45 °C: 0.4 %B/min spreads most samples out, so retention and width shifts are obvious.</span>
+                    <span className="muted small">10→30 %B over 30 min at 45 °C: 0.67 %B/min spreads most samples out, so retention and width shifts are obvious, and it is never longer than anything the loop proposes.</span>
                   </div>
                   <div className="grid g2">
                     {[['start %B', 0, 0.5, 'start_phi'], ['end %B', 1, 0.5, 'end_phi'], ['duration', 2, 1, 'min'], ['temperature', 3, 1, '°C']].map(([label, i, stp, unit]) => (

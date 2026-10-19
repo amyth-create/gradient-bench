@@ -31,6 +31,11 @@ closed-loop Bayesian optimization of gradients in automated LC method developmen
   identity `d_W = 0` between two timetables that draw the same profile, and vertical steps.
 - Priors stay BoTorch's: `ℓ_W` carries the dimension-scaled LogNormal with D = 1 and the
   `GreaterThan(0.025)` constraint; the second factor is built by BoTorch's own constructor.
+- **The longest method is 30 min, not 60.** `duration_min` is bounded 10–30 in `ramp4`, the
+  same ceiling `steps8` has on its total duration, so the two spaces share one envelope. The
+  shallow-survey reference preset becomes 10→30 %B over 30 min at 45 °C, so the reference is
+  never longer than anything the loop proposes. A campaign created under the old box keeps
+  its runs; a run longer than 30 min now sits outside the envelope the acquisition searches.
 - Matérn-5/2 on the single ramp remains the recommended default. The shape-aware kernels
   earn their keep in `steps8`, where many timetables draw one profile; in `ramp4` they only
   change what *nearby* means. None is yet validated on this bench.

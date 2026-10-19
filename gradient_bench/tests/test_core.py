@@ -97,7 +97,8 @@ def test_norm_round_trip():
 
 @pytest.mark.parametrize("u,ok", [
     ([0.14, 0.62, 18.0, 48.0], True),      # method4-ish, reference preset A
-    ([0.10, 0.30, 50.0, 45.0], True),      # reference preset B
+    ([0.10, 0.30, 30.0, 45.0], True),      # reference preset B
+    ([0.10, 0.30, 50.0, 45.0], False),     # 50 min: longer than the box
     ([0.20, 0.20, 30.0, 40.0], True),      # isocratic is INSIDE the space
     ([0.30, 0.10, 20.0, 40.0], False),     # end below start
     ([0.50, 0.90, 20.0, 40.0], False),     # start above the box
@@ -364,7 +365,7 @@ def test_a_closed_campaign_is_reopened_not_extended():
 
 
 # ── the stopping rule, against a real campaign folder ───────────────────────
-REF_METHOD = [0.10, 0.30, 50.0, 45.0]
+REF_METHOD = [0.10, 0.30, 30.0, 45.0]
 
 
 def _campaign(tmp_path, monkeypatch, **kw):

@@ -66,7 +66,7 @@ PHI_START_MAX = 0.40    # highest starting %B
 PHI_LAST_MIN = 0.10     # lowest final %B
 PHI_MAX = 1.00
 T_LAST_MIN = 10.0       # shortest method, min
-T_MAX = 60.0            # longest method, min
+T_MAX = 30.0            # longest method, min (60 until version 3; see CHANGELOG)
 TEMP_MIN, TEMP_MAX = 25.0, 60.0
 
 #: steps8 only. The longest method, and the technical floor on its length -

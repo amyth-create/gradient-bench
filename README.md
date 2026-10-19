@@ -100,7 +100,7 @@ Confirm the install before trusting it:
 
 ```bash
 python -m gradient_bench.scripts.verify_install    # says what is missing and what to do
-python -m pytest gradient_bench/tests -q           # expect 147 passed
+python -m pytest gradient_bench/tests -q           # expect 148 passed
 ```
 
 **Keep the workbook closed while the app is recording.** A campaign's
@@ -186,7 +186,7 @@ Chosen at campaign creation and locked, like the kernel (version 3). Two spaces:
 |---|---|---|
 | `start_phi` | 0.02 – 0.40 | starting %B, as a fraction |
 | `end_phi` | 0.10 – 1.00 | final %B |
-| `duration_min` | 10 – 60 min | gradient length |
+| `duration_min` | 10 – 30 min | gradient length |
 | `T` | 25 – 60 °C | column temperature |
 
 The constraint is `end_phi >= start_phi`. The minimum span is **zero on purpose**:
@@ -380,7 +380,7 @@ gradient_bench/          the app
   store/campaign.py      a campaign is a folder; the workbook is its record
   api/app.py             the Flask API and the pre-built frontend
   scripts/               verify_install, replay_corpus (headless)
-  tests/                 147 tests, including golden files
+  tests/                 148 tests, including golden files
 frontend/                React source (Vite): tabs/, components/, styles/
 testdata/                21 real chromatograms and their sheet
 docs/screenshots/        the images in this README
@@ -393,7 +393,7 @@ picker, edit the copy in `core/` and re-run the tests.
 ## Tests
 
 ```bash
-python -m pytest gradient_bench/tests -q                    # 147 passed
+python -m pytest gradient_bench/tests -q                    # 148 passed
 python -m gradient_bench.scripts.replay_corpus --trace-dir testdata/traces
 ```
 
