@@ -32,7 +32,7 @@ function CampaignInfo({ reload }) {
       <div className="cardhead"><h3>Campaign information</h3><Busy label={busy} /></div>
       <div className="grid g2">
         {d.fields.map(([k, label]) => (
-          <Field key={k} label={label} help={d.material.includes(k) ? <Term k="material">material</Term> : ''}>
+          <Field key={k} label={label}>
             <input value={edit[k] ?? (d.info[k] ?? '')} onChange={(e) => setEdit({ ...edit, [k]: e.target.value })} />
           </Field>
         ))}

@@ -100,12 +100,14 @@ def workbook(c: Campaign, out_path: Optional[str] = None) -> str:
     if refs:
         # The verdict goes in a COLUMN, not in DataFrame.attrs - `to_excel`
         # does not write attrs, so that would have been provenance that is not
-        # actually in the file.
+        # actually in the file. The delta is from the run's OWN block's anchor:
+        # a service opens a new block with a new zero.
         v = c.verdict()
         frames["Reference series"] = pd.DataFrame(
             [{"name": r.name, "run_order": r.run_order, "crf": r.crf,
-              "delta_from_anchor": r.crf - refs[0].crf,
-              "verdict_at_export": v.verdict} for r in refs])
+              "block": i + 1, "delta_from_anchor": r.crf - brefs[0].crf,
+              "verdict_at_export": v.verdict}
+             for i, (_, brefs) in enumerate(c.reference_blocks()) for r in brefs])
 
     lim = c.drift_limits()
     frames["Export"] = pd.DataFrame({"field": [
@@ -115,6 +117,7 @@ def workbook(c: Campaign, out_path: Optional[str] = None) -> str:
         "drift_adjusted_reporting", "kernel",
         "drift_watch_delta", "drift_halt_delta", "drift_monotone_k",
         "reference_every", "reference_method",
+        "blocks", "service_history",
     ], "value": [
         _stamp(), c.root, SH.SCHEMA_VERSION, c.verdict().verdict,
         # `runs_used` and `run_budget` are in METHODS. The two injection
@@ -127,6 +130,7 @@ def workbook(c: Campaign, out_path: Optional[str] = None) -> str:
         json.dumps([round(float(x), 6) for x in (c.reference_method()
                                                  if c.reference_method() is not None
                                                  else [])]),
+        len(c.blocks()), json.dumps(c.service_history()),
     ]})
 
     # Every picker field, not only the ones the campaign states - a reader
@@ -376,8 +380,16 @@ def pdf(c: Campaign, out_path: Optional[str] = None) -> str:
         if refs:
             ax.plot([r.run_order for r in refs], [r.crf for r in refs], "o-",
                     lw=1.5, ms=4, color="#16201C")
-            a = refs[0].crf
-            ax.axhline(a, color="#55635B", lw=1, label=f"anchor {a:.2f}")
+            # the limits are the CURRENT block's; a service is a boundary
+            # the chart shows rather than a point it interpolates through
+            cur = c.current_references()
+            a = (cur[0] if cur else refs[0]).crf
+            for ev in c.service_history():
+                ax.axvline(float(ev.get("after_run_order", 0)) + 0.5,
+                           color="#A32F27", ls=":", lw=1)
+            ax.axhline(a, color="#55635B", lw=1,
+                       label=(f"anchor {a:.2f}" if len(c.blocks()) == 1 else
+                              f"anchor {a:.2f} (block {len(c.blocks())})"))
             ax.axhline(a - lim["watch"], color="#B4531F", ls="--", lw=1,
                        label=f"WATCH -{lim['watch']:g}")
             ax.axhline(a - lim["halt"], color="#A32F27", ls="--", lw=1,

@@ -64,7 +64,7 @@ export function LearningCurve({ points, height = 260 }) {
 }
 
 /** The control chart: reference CRF against the instrument position it ran at. */
-export function ControlChart({ series, verdict, limits, height = 280 }) {
+export function ControlChart({ series, verdict, limits, blocks = [], height = 280 }) {
   const W = 860, L = 58, R = 104, TT = 18, B = 42
   if (!series?.length) return null
   const iw = W - L - R, ih = height - TT - B
@@ -85,6 +85,12 @@ export function ControlChart({ series, verdict, limits, height = 280 }) {
       <svg viewBox={`0 0 ${W} ${height}`} role="img" aria-label={`control chart, verdict ${verdict.verdict}`}>
         {band(anchor - limits.halt, anchor - limits.watch, 'var(--watch-soft)', 'w')}
         {band(lo, anchor - limits.halt, 'var(--halt-soft)', 'h')}
+        {blocks.slice(1).map((b) => (
+          <g key={`b${b.index}`}>
+            <line x1={X(b.after_run_order + 0.5)} x2={X(b.after_run_order + 0.5)} y1={TT} y2={TT + ih} stroke="var(--halt)" strokeDasharray="2 3" strokeWidth="1.1" />
+            <T x={X(b.after_run_order + 0.5) + 4} y={TT + 10} anchor="start" style={{ fill: 'var(--halt)', fontSize: 9.5 }}>serviced</T>
+          </g>
+        ))}
         {yt.map((v) => (
           <g key={v}>
             <line x1={L} x2={L + iw} y1={Y(v)} y2={Y(v)} stroke="var(--grid)" />

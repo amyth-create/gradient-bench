@@ -52,7 +52,7 @@ the very first thing any campaign runs is that check (the "anchor").
 | Peak picking | numpy, scipy, pybaselines | Vendored picker `hplc_picker` 3.0.0, self-contained. |
 | Record | openpyxl / pandas workbook | An `.xlsx` a chemist can open without the app. |
 | Frontend | React 18 + Vite 5, no UI library | Built into `gradient_bench/api/static/`; the Python package ships the built bundle so no Node is needed to run. |
-| Tests | pytest, 148 tests | Golden files against 20 real chromatograms plus unit tests for every layer. |
+| Tests | pytest, 153 tests | Golden files against 20 real chromatograms plus unit tests for every layer. |
 
 Long calls (a GP fit, a picker pass, an export) run as in-process background threads
 (`jobs.py`) that the page polls every 250 ms, so a fit never leaves a button dead.
@@ -99,7 +99,7 @@ v3/
     scripts/
       verify_install.py          11 install checks
       replay_corpus.py           headless end-to-end over the corpus (--kernel)
-    tests/test_core.py           148 tests
+    tests/test_core.py           153 tests
     golden_files.json            adjudicated expectations for the corpus
 ```
 
@@ -463,9 +463,14 @@ One method held fixed, run first (the **anchor**, `ref01`) and again every `REFE
 | WATCH | 1.5 CRF below the anchor, or no reference at all (unmeasured is not clean) |
 | HALT | 3.0 CRF below the anchor, or 3 consecutive falls |
 
-A HALT blocks proposing; the instructions are to service and re-anchor, treating everything
-before the service as a separate block. Reference runs are excluded from the model
-structurally (`training_set()` filters on `source`).
+A HALT blocks proposing, and has exactly one exit: `Campaign.service(reason)` records the
+service (`service_history` on the Campaign sheet) and opens a new **block**. The verdict,
+the schedule and the health channels read the current block only (`current_references()`),
+so the next instrument check is demanded as an anchor exactly as on day one, and the limits
+and the monotone rule restart from it. Drift adjustment is per block
+(`drift_adjust_blocks`): nothing is corrected across a service. A service is refused while
+a run is on the instrument and when the current block has no anchor yet. Reference runs are
+excluded from the model structurally (`training_set()` filters on `source`).
 
 **Drift-adjusted scores** (`drift_adjust`: raw minus the interpolated reference offset) exist
 but are off by default and **never** fed to the model: adjusting assumes the drift is
@@ -592,7 +597,7 @@ Python package runs without Node. The dev server proxies `/api` to port 5051.
 
 ## 16. Testing and scripts
 
-- `python -m pytest gradient_bench/tests -q` — 148 tests. Golden files adjudicate the 20
+- `python -m pytest gradient_bench/tests -q` — 153 tests. Golden files adjudicate the 20
   corpus traces; the space tests check constraint normalisation against the absolute
   definition on random points, the sampler, and round trips through the sheet; the shape
   tests check the distance against quadrature, the metric axioms, vertical steps, the Gram

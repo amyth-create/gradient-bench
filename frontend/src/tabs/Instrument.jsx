@@ -4,6 +4,7 @@ import { useAsync, f } from '../hooks'
 import Term from '../components/Term.jsx'
 import { Banner, Busy, Err, Light, Tag, Tile, Skeleton, Segmented } from '../components/ui.jsx'
 import { ControlChart, Spark } from '../components/charts.jsx'
+import ServiceActions from '../components/ServiceActions.jsx'
 
 export default function Instrument({ reload }) {
   const { busy, err, run } = useAsync()
@@ -23,7 +24,8 @@ export default function Instrument({ reload }) {
         <Light v={v.verdict}><Term k="verdict">instrument {v.verdict}</Term></Light>
       </div>
 
-      <Banner kind={v.verdict} eyebrow="instrument check" title={v.verdict === 'PASS' ? 'The reference is holding' : v.verdict === 'HALT' ? 'Halt: proposing is blocked until the instrument is serviced and re-anchored' : 'Watch: the reference has moved, or is not yet measured'} actions={v.actions} role={v.verdict === 'HALT' ? 'alert' : undefined} className="mt3">
+      <Banner kind={v.verdict} eyebrow="instrument check" title={v.verdict === 'PASS' ? 'The reference is holding' : v.verdict === 'HALT' ? 'Halt: proposing is blocked until the instrument is serviced and re-anchored' : v.awaiting_anchor ? 'Serviced — the next instrument check anchors the new block' : 'Watch: the reference has moved, or is not yet measured'} actions={v.actions} role={v.verdict === 'HALT' ? 'alert' : undefined} className="mt3"
+              form={v.verdict === 'HALT' ? <ServiceActions reload={() => Promise.all([load(), reload()])} compact /> : null}>
         <p>{v.reasons.join(' ')}</p>
       </Banner>
 
@@ -45,13 +47,22 @@ export default function Instrument({ reload }) {
           <p className="muted mb0">No reference run yet. The <Term k="anchor">anchor</Term> is the zero every later reference is a difference from, and it cannot be added afterwards.</p>
         ) : (
           <>
-            <ControlChart series={d.series} verdict={v} limits={d.limits} />
+            <ControlChart series={d.series} verdict={v} limits={d.limits} blocks={d.service} />
             <div className="tiles mt3">
-              <Tile label="anchor" term="anchor" value={fmt(v.anchor, 2)} unit="CRF" note="the first reference" />
+              <Tile label="anchor" term="anchor" value={fmt(v.anchor, 2)} unit="CRF" note={d.service.length > 1 ? `block ${v.block + 1} of ${d.service.length}` : 'the first reference'} />
               <Tile label="latest" value={fmt(v.last, 2)} unit="CRF" note={`${v.delta > 0 ? '+' : ''}${fmt(v.delta, 2)} from the anchor`} />
               <Tile label="trend" value={fmt(v.slope, 3)} unit="CRF/run" note={Number.isFinite(v.implied_fall) ? `implying ${fmt(v.implied_fall, 2)} over ${fmt(v.span, 0)} runs` : 'least squares through the references'} />
               <Tile label="limits" value={`−${d.limits.watch} / −${d.limits.halt}`} note={<>WATCH / HALT below the anchor, or {d.limits.monotone_k} <Term k="monotone">consecutive falls</Term></>} />
             </div>
+            {d.service.length > 1 && (
+              <details className="disclose mt3"><summary><Term k="block">Service record</Term> ({d.service.length - 1})</summary>
+                {d.service.slice(1).map((b) => (
+                  <div className="histline" key={b.index}><b>block {b.index + 1}</b><span className="when">{(b.serviced_at || '').replace('T', ' ')}</span>
+                    <span>after run {b.after_run_order}</span><span style={{ flex: 1 }}>{b.reason}</span>
+                    {b.anchor == null ? <Tag kind="watch">awaiting its anchor</Tag> : <span>anchor {Number(b.anchor).toFixed(2)}</span>}</div>
+                ))}
+              </details>
+            )}
           </>
         )}
       </div>

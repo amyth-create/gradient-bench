@@ -98,7 +98,7 @@ def test_norm_round_trip():
 @pytest.mark.parametrize("u,ok", [
     ([0.14, 0.62, 18.0, 48.0], True),      # method4-ish, reference preset A
     ([0.10, 0.30, 30.0, 45.0], True),      # reference preset B
-    ([0.10, 0.30, 50.0, 45.0], False),     # 50 min: longer than the box
+    ([0.10, 0.30, 50.0, 45.0], False),     # 50 min: longer than the box since 1.2.0
     ([0.20, 0.20, 30.0, 40.0], True),      # isocratic is INSIDE the space
     ([0.30, 0.10, 20.0, 40.0], False),     # end below start
     ([0.50, 0.90, 20.0, 40.0], False),     # start above the box
@@ -1620,7 +1620,8 @@ def test_a_campaign_records_and_locks_its_optimiser_choice(tmp_path, monkeypatch
     cfg = c.config()
     assert cfg["acquisition"] == "ucb"
     assert cfg["acquisition_note"] == "qUpperConfidenceBound (ucb_beta=3.5)"
-    assert cfg["app_version"] == "1.1.0"
+    from gradient_bench import APP_VERSION
+    assert cfg["app_version"] == APP_VERSION      # stamped, not pinned here
     s = c.summary()["optimiser"]
     assert s["acquisition_short"] == "UCB" and s["kernel_label"].startswith("Mat")
     # the choice travels with duplicated settings
@@ -2024,3 +2025,102 @@ def test_the_method_page_describes_the_steps8_space(tmp_path, monkeypatch):
     text = " ".join(str(r) for r in sur["rows"])
     assert "MaternKernel" in text and "start_phi, end_phi, duration_min, T" in text
     assert not sur["warnings"]
+
+
+# ── version 1.2.0: a HALT has a way out ─────────────────────────────────────
+def _halted_campaign(tmp_path, monkeypatch):
+    from gradient_bench.store import sheet as SH
+    c = _campaign(tmp_path, monkeypatch)
+    _add_run(c, "ref01", SH.SOURCE_REFERENCE, 1, 10.0, 1)
+    for i in range(1, 6):
+        _add_run(c, f"m{i:02d}r1", SH.SOURCE_DESIGN, 1, 7.0 + i * 0.1, 1 + i)
+    _add_run(c, "ref02", SH.SOURCE_REFERENCE, 1, 6.5, 7)       # -3.5: HALT
+    return c
+
+
+def test_a_halt_blocks_proposing_and_has_exactly_one_exit(tmp_path, monkeypatch):
+    from gradient_bench import loop as L
+    from gradient_bench.store import sheet as SH
+    c = _halted_campaign(tmp_path, monkeypatch)
+    assert c.verdict().verdict == "HALT"
+    assert L.next_step(c).action == "halted" and L.next_step(c).blocked
+    with pytest.raises(RuntimeError):
+        L.suggest(c)
+    with pytest.raises(ValueError):            # a service needs a reason
+        c.service("")
+    ev = c.service("fresh mobile phase, column re-equilibrated")
+    assert ev["event"] == "serviced" and ev["after_run_order"] == 7
+    assert ev["verdict_before"] == "HALT" and ev["block"] == 1
+    # the new block has no anchor: the schedule demands one, as on day one
+    v = c.verdict()
+    assert v.verdict == "WATCH" and v.awaiting_anchor and not v.blocks_proposing
+    step = L.next_step(c)
+    assert step.action == "anchor" and not step.blocked
+    assert "serviced" in step.detail
+    # the anchor is recorded: the block is clean and the loop is released
+    _add_run(c, "ref03", SH.SOURCE_REFERENCE, 1, 9.8, 8)
+    v = c.verdict()
+    assert v.verdict == "PASS" and v.block == 1 and v.n == 1
+    assert v.anchor == pytest.approx(9.8)
+    assert v.previous_anchor == pytest.approx(10.0)
+    assert L.next_step(c).action in ("seed", "proposal")
+    # the record keeps every block
+    assert len(c.references()) == 3 and len(c.current_references()) == 1
+    b = c.blocks()
+    assert [x["n_ref"] for x in b] == [2, 1] and b[1]["anchor"] == pytest.approx(9.8)
+    assert c.summary()["block"] == 1 and c.summary()["n_services"] == 1
+
+
+def test_a_service_cannot_be_recorded_twice_or_mid_run(tmp_path, monkeypatch):
+    from gradient_bench.store import sheet as SH, state as ST
+    c = _campaign(tmp_path, monkeypatch)
+    with pytest.raises(ValueError):            # nothing to close yet
+        c.service("fresh mobile phase")
+    _add_run(c, "ref01", SH.SOURCE_REFERENCE, 1, 10.0, 1)
+    c.service("column replaced")
+    with pytest.raises(ValueError):            # already waiting for its anchor
+        c.service("and again")
+    _add_run(c, "ref02", SH.SOURCE_REFERENCE, 1, 9.0, 2)
+    ST.save(c.state_path, ST.PendingRun(kind="design", u=list(REF_METHOD),
+                                        phase="cold_start", n_replicates=1))
+    with pytest.raises(ValueError):            # a run is on the instrument
+        c.service("oven settled")
+    ST.clear(c.state_path)
+    assert c.service("oven settled")["block"] == 2
+    assert len(c.blocks()) == 3
+
+
+def test_the_monotone_rule_does_not_cross_a_service(tmp_path, monkeypatch):
+    from gradient_bench.store import sheet as SH
+    c = _campaign(tmp_path, monkeypatch)
+    _add_run(c, "ref01", SH.SOURCE_REFERENCE, 1, 10.0, 1)
+    _add_run(c, "ref02", SH.SOURCE_REFERENCE, 1, 9.5, 2)
+    c.service("fresh mobile phase")
+    _add_run(c, "ref03", SH.SOURCE_REFERENCE, 1, 9.0, 3)
+    _add_run(c, "ref04", SH.SOURCE_REFERENCE, 1, 8.8, 4)
+    # four falls in a row across the whole record, but only two in this block
+    v = c.verdict()
+    assert v.verdict == "PASS" and v.delta == pytest.approx(-0.2)
+
+
+def test_drift_adjustment_never_crosses_a_service():
+    refs = [D.ReferenceRun(1, 10.0), D.ReferenceRun(5, 8.0),
+            D.ReferenceRun(7, 12.0), D.ReferenceRun(11, 12.0)]
+    blocks = D.split_blocks(refs, [0.0, 6.0])         # serviced after run 6
+    assert [len(b) for _, b in blocks] == [2, 2]
+    # run 3 sits between 10 and 8 in block 1 -> -1; run 9 between two 12s in
+    # block 2 -> 0. One baseline through all four would have smeared the
+    # service across both.
+    off = D.drift_offset_blocks([3.0, 9.0], blocks)
+    assert off[0] == pytest.approx(-1.0) and off[1] == pytest.approx(0.0)
+    # a block with no reference yet corrects nothing
+    assert D.drift_offset_blocks([9.0], D.split_blocks(refs[:2], [0.0, 6.0]))[0] == 0.0
+    # and best_so_far reads the blocks when given them
+    inc = D.best_so_far([15.0, 15.0], [3.0, 9.0], ["A", "B"], refs, blocks=blocks)
+    assert inc.adj_method == "A"                      # A's day was 1 CRF below its anchor
+
+
+def test_the_duration_bound_is_thirty_minutes():
+    assert S.RAMP4.upper[2] == 30.0 and S.RAMP4.lower[2] == 10.0
+    assert not S.check4([0.10, 0.30, 45.0, 45.0])[0]
+    assert S.check4(D.REFERENCE_PRESETS["shallow_survey"]["u"])[0]
