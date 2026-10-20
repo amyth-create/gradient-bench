@@ -100,7 +100,7 @@ Confirm the install before trusting it:
 
 ```bash
 python -m gradient_bench.scripts.verify_install    # says what is missing and what to do
-python -m pytest gradient_bench/tests -q           # expect 130 passed
+python -m pytest gradient_bench/tests -q           # expect 148 passed
 ```
 
 **Keep the workbook closed while the app is recording.** A campaign's
@@ -178,19 +178,45 @@ instrument; they must never score the chemistry.
 
 ### The design space
 
-Four controllable parameters, a box, and one linear constraint:
+Chosen at campaign creation and locked, like the kernel (version 3). Two spaces:
+
+**Single ramp** (`ramp4`, the default) — four parameters, a box, one linear constraint:
 
 | Parameter | Range | |
 |---|---|---|
 | `start_phi` | 0.02 – 0.40 | starting %B, as a fraction |
 | `end_phi` | 0.10 – 1.00 | final %B |
-| `duration_min` | 10 – 60 min | gradient length |
+| `duration_min` | 10 – 30 min | gradient length |
 | `T` | 25 – 60 °C | column temperature |
 
 The constraint is `end_phi >= start_phi`. The minimum span is **zero on purpose**:
 `end_phi == start_phi` is an isocratic method, which is a legitimate answer the optimiser is
-allowed to reach. The constraint is handed to the acquisition optimiser natively rather than
-by rejection sampling, so proposals are feasible by construction.
+allowed to reach.
+
+**Three-segment timetable** (`steps8`) — a four-node pump programme written in deltas:
+
+| Parameter | Range | |
+|---|---|---|
+| `phi0` | 0.02 – 0.40 | starting %B |
+| `dphi1`, `dphi2`, `dphi3` | ≥ 0 | composition step of each segment (0 = a hold) |
+| `dt1`, `dt2`, `dt3` | ≥ 0 | duration of each segment (0 = an instantaneous jump) |
+| `T` | 25 – 60 °C | column temperature |
+
+The nodes are the cumulative sums, so the first node is at t = 0 and needs no parameter.
+Writing the timetable in deltas puts monotonicity into the box, and **nothing else is
+bounded per segment**: no minimum segment length, no largest single step. The only
+constraints are on the sums — final %B at most 100, total duration at most 30 min — plus a
+1-minute floor on the total duration, which is a technical necessity (the profile is drawn
+on time divided by the duration) rather than a design choice. So the same setup reaches a
+ramp, a step gradient, a hold-then-ramp, and two- or three-slope gradients. Cold-start seeds
+come from the paper's window-relative sampler (endpoints first, interior nodes inside the
+window they define), so shallow and bent profiles are as reachable as diagonal ones. The
+instrument-check method stays a single ramp in either space.
+
+Every constraint is handed to the acquisition optimiser natively rather than by rejection
+sampling, so proposals are feasible by construction. Both spaces write the same eight sheet
+columns (`t1 t2 t3 phi1 phi2 phi3 phi4 T`); a ramp leaves `t2 = t3 = 0`, which is how a row
+says which space it came from.
 
 ### The surrogate and the acquisition
 
@@ -204,11 +230,69 @@ one kernel and re-fitted under another is not the same campaign.
 | `matern52` | Matérn-5/2 ARD *(default)* | `qlognei` | log noisy expected improvement *(default)* |
 | `matern32` | Matérn-3/2 | `qlogei` | log expected improvement |
 | `rbf` | squared exponential | `ucb` | upper confidence bound, `beta` you set and defend |
-| `default` | whatever BoTorch installs | `logpi` | log probability of improvement |
+| `wasserstein` | shape-aware × RBF(duration, T) *(v3)* | `logpi` | log probability of improvement |
+| `wasserstein_matern` | shape-aware × Matérn-5/2(duration, T) *(v3)* | | |
+| `wasserstein_plus` | shape-aware plus endpoints × ARD RBF *(v3)* | | |
+| `wasserstein_plus_matern` | shape-aware plus endpoints × ARD Matérn-5/2 *(v3)* | | |
+| `default` | whatever BoTorch installs | | |
 
 The default pairing is qLogNEI on a Matérn-5/2 — noisy expected improvement because
 replicates disagree and the incumbent is itself uncertain, and the log form because the
 plain one underflows into a flat surface the optimiser cannot climb.
+
+### The shape-aware kernels (version 3)
+
+The coordinate kernels above say two methods are alike when their start %B values are
+close *and* their end %B values are close, each on its own ruler. The shape-aware kernels
+say two methods are alike when the **gradient profiles they deliver** are close: both ramps
+are drawn on a normalised 0–1 time axis with %B as a fraction, and the distance between
+them is the **area between the two lines** — for monotonic one-dimensional profiles, the
+Wasserstein-1 distance of Boelrijk, Detlefsen, Dürholt and Haas, *Shape-aware Gaussian
+process kernels for closed-loop Bayesian optimization of gradients in automated LC method
+development* (ChemRxiv, 2026). A ramp from 10 to 50 %B and one from 20 to 40 %B sweep
+nearly the same composition window and are 0.05 apart; 10→50 and 30→70 are 0.20 apart.
+
+That distance is turned into a covariance as `exp(−d_W / ℓ_W)` and multiplied by a second
+kernel over what the profile comparison deliberately discards. The second factor is a
+squared exponential in the paper; each form is also offered with a Matérn-5/2 there, for the
+reason this app prefers Matérn elsewhere:
+
+```
+wasserstein               k = exp(−d_W/ℓ_W) · RBF(duration, T)
+wasserstein_matern        k = exp(−d_W/ℓ_W) · Matérn-5/2(duration, T)
+wasserstein_plus          k = exp(−d_W/ℓ_W) · ARD RBF(start_phi, end_phi, duration, T)
+wasserstein_plus_matern   k = exp(−d_W/ℓ_W) · ARD Matérn-5/2(start_phi, end_phi, duration, T)
+```
+
+The plus forms are the paper's *Wasserstein+*: the endpoints keep lengthscales of their
+own, for samples where one endpoint dominates the separation (the paper found this on its
+experimental datasets, where many analytes eluted at low %B). In the three-segment space the
+endpoint features are derived from the timetable (`end_phi = phi0 + Σ dphi`,
+`duration = Σ dt`) inside the kernel, so the same four feature names appear in either space.
+All forms carry BoTorch's own priors — `ℓ_W` under the dimension-scaled LogNormal with D = 1
+and the same `GreaterThan(0.025)` constraint, the second factor built by BoTorch's
+constructor — and the Model tab reports a **shape** lengthscale, in units of area between
+profiles, beside the others.
+
+**Where it earns its keep.** The paper's headline case is *timetable redundancy*: a
+multi-node pump programme can write one profile many ways (slide a node along the line
+joining its neighbours), and a coordinate kernel wastes budget learning that those
+timetables are the same experiment. In the three-segment space the Wasserstein distance
+between two such timetables is exactly zero, so the shape-aware kernels are the natural
+pairing there. In the single-ramp space there is no such redundancy, and the shape-aware
+kernels only change what *nearby* means. They are options, not the default, and are not yet
+validated on this bench; the Model tab's learning curve is how to find out. The distance is
+implemented for piecewise-linear profiles in general (`core/shape.py`).
+
+**What has been checked so far (2026-09-15).** On a smooth synthetic response with 0.5 CRF
+noise, leave-one-out R² over five random designs was, for Matérn-5/2 / Wasserstein /
+Wasserstein+: −0.17 / −0.36 / −0.13 at 8 runs, +0.26 / +0.01 / +0.32 at 12, +0.52 / +0.39 /
++0.53 at 20 and +0.81 / +0.68 / +0.83 at 30, with the shape lengthscale settling near 0.16.
+So the kernel learns, and the plus form is the one to reach for first. On the bundled
+15-method corpus every kernel has negative leave-one-out R² and the shape lengthscale
+collapses to its floor — the marginal likelihood genuinely prefers that on data whose CRF
+is an integer peak count with a fallback σ of 1 — which says the corpus is too small and
+too noisy to rank kernels, not that either is wrong.
 
 BoTorch is pinned to `>=0.18,<0.19` deliberately: its *default* kernel and priors changed
 between releases. The resolved versions of every library are written into each campaign's
@@ -287,15 +371,16 @@ own workbook, not from a page maintained by hand, and prints with its own masthe
 ```
 gradient_bench/          the app
   core/                  the science: space, optimiser, picker, CRF, drift, uncertainty
-    space.py             4 parameters, the box, the linear constraint
+    space.py             the design spaces: ramp4 (4 parameters) and steps8 (three segments in deltas)
     optimiser.py         SURROGATE_OPTIONS, ACQUISITION_OPTIONS, the GP fit
+    shape.py             the shape-aware kernels: Wasserstein-1 between gradient profiles (v3)
     hplc_picker.py       the only copy of the peak picker — it defines what a peak is
     crf.py               the objective, frozen
     drift.py             the control chart and its limits
   store/campaign.py      a campaign is a folder; the workbook is its record
   api/app.py             the Flask API and the pre-built frontend
   scripts/               verify_install, replay_corpus (headless)
-  tests/                 130 tests, including golden files
+  tests/                 148 tests, including golden files
 frontend/                React source (Vite): tabs/, components/, styles/
 testdata/                21 real chromatograms and their sheet
 docs/screenshots/        the images in this README
@@ -308,7 +393,7 @@ picker, edit the copy in `core/` and re-run the tests.
 ## Tests
 
 ```bash
-python -m pytest gradient_bench/tests -q                    # 130 passed
+python -m pytest gradient_bench/tests -q                    # 148 passed
 python -m gradient_bench.scripts.replay_corpus --trace-dir testdata/traces
 ```
 

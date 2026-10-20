@@ -130,6 +130,8 @@ def create_app() -> Flask:
         the choice it produces is written once and locked."""
         return ok({"surrogates": O.SURROGATE_OPTIONS,
                    "acquisitions": O.ACQUISITION_OPTIONS,
+                   "spaces": S.SPACE_OPTIONS,
+                   "default_space": S.DEFAULT_SPACE,
                    "default_kernel": O.DEFAULT_KERNEL,
                    "default_acquisition": O.DEFAULT_ACQUISITION,
                    "acq_param_defaults": O.ACQ_PARAM_DEFAULTS,
@@ -195,7 +197,8 @@ def create_app() -> Flask:
                                      or O.DEFAULT_ACQUISITION),
                      acq_params=b.get("acq_params") or {},
                      acq_num_restarts=int(b.get("acq_num_restarts", 10)),
-                     acq_raw_samples=int(b.get("acq_raw_samples", 512)))
+                     acq_raw_samples=int(b.get("acq_raw_samples", 512)),
+                     space=str(b.get("space") or S.DEFAULT_SPACE))
         app.config["OPEN"]["campaign"] = c
         return ok({"campaign": c.summary()})
 
@@ -280,6 +283,8 @@ def create_app() -> Flask:
                 "manual_humps": pend.manual_humps,
                 "picker_overrides": pend.picker_overrides,
                 "gradient": (S.gradient_table(pend.u) if pend.u else None),
+                "summary": (S.for_vector(pend.u).summary(pend.u) if pend.u else None),
+                "T": (float(pend.u[-1]) if pend.u else None),
             }),
             "drift": {"verdict": v.verdict, "reasons": v.reasons,
                       "actions": v.actions(), "n": v.n,
@@ -299,6 +304,8 @@ def create_app() -> Flask:
             pend = L.suggest(c)
             return _json_safe({"pending": pend.__dict__,
                                "gradient": S.gradient_table(pend.u),
+                               "summary": S.for_vector(pend.u).summary(pend.u),
+                               "T": float(pend.u[-1]),
                                "step": pend.step()})
         job = jobs.submit("Working out the next method", _work)
         return ok({"job": job.as_dict()})
@@ -396,6 +403,15 @@ def create_app() -> Flask:
                 "T", "picker_deviates", "manual_humps", "notes", "recorded_at"]
         cols = [x for x in cols if x in df.columns]
         rows = [] if not len(df) else df[cols].to_dict(orient="records")
+        # The method as chemistry, whatever space wrote the row: a ramp and a
+        # three-segment timetable both have a start, an end and a duration,
+        # and the table reads those rather than the raw sheet columns.
+        for r, (_, full) in zip(rows, df.iterrows() if len(df) else []):
+            sp = S.space_for_row(full)
+            try:
+                r.update(sp.summary(sp.from_abs(full)))
+            except Exception:                                   # noqa: BLE001
+                pass
 
         # The drift-adjusted score travels beside the raw one, ALWAYS, whatever
         # the toggle says. The toggle decides which is reported as best; it
@@ -460,8 +476,10 @@ def create_app() -> Flask:
             "method": str(row["method"]), "source": str(row["source"]),
             "run_order": row.get("run_order"),
             "recorded_crf": row.get("CRF"),
-            "gradient": S.gradient_table(S.abs_to_4param(row)),
-            "u": [float(x) for x in S.abs_to_4param(row)],
+            "gradient": S.space_for_row(row).gradient_table(S.space_for_row(row).from_abs(row)),
+            "u": [float(x) for x in S.space_for_row(row).from_abs(row)],
+            "summary": S.space_for_row(row).summary(S.space_for_row(row).from_abs(row)),
+            "T": float(row["T"]),
             "deviates": SH.truthy(row.get("picker_deviates")),
             "hump_drawn": bool(str(row.get("manual_humps") or "").strip()
                                not in ("", "nan")),

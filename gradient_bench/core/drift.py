@@ -48,11 +48,13 @@ REFERENCE_PRESETS = {
                "lose, so it is the most sensitive detector of degradation.",
     },
     "shallow_survey": {
-        "u": [0.10, 0.30, 50.0, 45.0],
+        "u": [0.10, 0.30, 30.0, 45.0],
         "label": "Shallow survey gradient",
-        "why": "0.4 %B/min over 50 min spreads the sample out, so retention and "
+        "why": "0.67 %B/min over 30 min spreads the sample out, so retention and "
                "width shifts are obvious. Independent of how a campaign went, "
-               "which makes it comparable between campaigns.",
+               "which makes it comparable between campaigns. 30 min is the "
+               "longest method the design space allows, so the reference is "
+               "never longer than anything the loop proposes.",
     },
 }
 

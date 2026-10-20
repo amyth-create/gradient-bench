@@ -60,6 +60,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--trace-dir",
                     default="/mnt/user-data/uploads/exp result/4d exp output")
+    ap.add_argument("--kernel", default=O.DEFAULT_KERNEL, choices=O.KERNELS,
+                    help="the surrogate to fit the corpus with (version 3 adds "
+                         "wasserstein and wasserstein_plus)")
     a = ap.parse_args()
     gold = json.load(open(os.path.join(PKG, "golden_files.json")))
 
@@ -105,7 +108,7 @@ def main() -> int:
     rule("4 - FIT THE SURROGATE")
     U = np.array([r["u"] for r in inside])
     Y = np.array([r["crf"] for r in inside])
-    fit = O.fit_gp(U, Y, sigma_crf=None)
+    fit = O.fit_gp(U, Y, sigma_crf=None, kernel=a.kernel)
     print(f"   {fit.n} runs, {fit.d}-D, fitted noise sd {fit.noise_sd_crf:.3f} CRF")
     for line in fit.noise.explain():
         print(f"   {line}")
@@ -114,7 +117,8 @@ def main() -> int:
         print(f"      {nm:<14}{v:8.3f}   {read}")
 
     rule("5 - PROPOSE THE NEXT METHOD")
-    sug = O.suggest_next(U, Y, sigma_crf=None, seed=20260805, fit=fit)
+    sug = O.suggest_next(U, Y, sigma_crf=None, seed=20260805, fit=fit,
+                         kernel=a.kernel)
     print(f"   {sug.u[0]*100:.2f} -> {sug.u[1]*100:.2f} %B over {sug.u[2]:.2f} min "
           f"at {sug.u[3]:.1f} C")
     print(f"   feasible={S.check4(sug.u)[0]}  logqNEI={sug.acq_value:.4f}  "

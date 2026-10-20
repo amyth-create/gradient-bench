@@ -181,12 +181,12 @@ def _campaign_round_trip() -> str:
     saved, C.REGISTRY = C.REGISTRY, os.path.join(tmp, "recent.json")
     try:
         c = C.create(tmp, {"name": "install check"},
-                     reference_method=[0.10, 0.30, 50.0, 45.0],
+                     reference_method=[0.10, 0.30, 30.0, 45.0],
                      n_replicates=1, run_budget=5)
         SH.append_run(c.workbook, method_name="ref01",
                       source=SH.SOURCE_REFERENCE, replicate=1,
                       params_abs=S.simple_gradient_abs(
-                          np.array([0.10, 0.30, 50.0, 45.0])),
+                          np.array([0.10, 0.30, 30.0, 45.0])),
                       row={"CRF": 9.0, "n_clean_peaks": 9,
                            "hump_time_fraction": 0.0},
                       run_order=1)

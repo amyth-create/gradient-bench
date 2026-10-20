@@ -57,6 +57,7 @@ function CampaignCard({ c, onOpen, onDuplicate, onReveal, onArchive }) {
               note={c.finished ? '' : c.next_is === 'reference' ? 'an instrument check' : 'a proposed method'} />
       </div>
       <div className="row" style={{ gap: 6, marginBottom: 12 }}>
+        {o.space_label && <Tag title="design space">{o.space_label}</Tag>}
         <Tag title="surrogate kernel">{o.kernel_label || c.kernel || '—'}</Tag>
         <Tag title="acquisition function">{o.acquisition_short || 'qLogNEI'}</Tag>
         {c.drift_adjusted && <Tag kind="info">drift-adjusted reporting</Tag>}
@@ -112,12 +113,13 @@ const STEPS = ['Folder', 'Campaign', 'Instrument check', 'Plan', 'Model', 'Revie
 function Wizard({ opts, folder, onPickFolder, onCreate, busy, err }) {
   const [step, setStep] = useState(folder ? 1 : 0)
   const [info, setInfo] = useState(Object.fromEntries(INFO_FIELDS.map(([k]) => [k, ''])))
-  const preset = opts?.reference_presets?.shallow_survey?.u || [0.10, 0.30, 50.0, 45.0]
+  const preset = opts?.reference_presets?.shallow_survey?.u || [0.10, 0.30, 30.0, 45.0]
   const [ref, setRef] = useState(preset)
   const [nrep, setNrep] = useState(2)
   const [nseed, setNseed] = useState(5)
   const [every, setEvery] = useState(5)
   const [budget, setBudget] = useState(opts?.budget_default || 40)
+  const [space, setSpace] = useState(opts?.default_space || 'ramp4')
   const [kernel, setKernel] = useState(opts?.default_kernel || 'matern52')
   const [acq, setAcq] = useState(opts?.default_acquisition || 'qlognei')
   const [acqParams, setAcqParams] = useState({ ...(opts?.acq_param_defaults || { ucb_beta: 2.0 }) })
@@ -126,7 +128,7 @@ function Wizard({ opts, folder, onPickFolder, onCreate, busy, err }) {
 
   useEffect(() => { if (folder && step === 0) setStep(1) }, [folder])   // eslint-disable-line
 
-  const lo = opts?.space?.lower || [0.02, 0.10, 10, 25], hi = opts?.space?.upper || [0.40, 1.00, 60, 60]
+  const lo = opts?.space?.lower || [0.02, 0.10, 10, 25], hi = opts?.space?.upper || [0.40, 1.00, 30, 60]
   const refErrors = useMemo(() => {
     const e = {}
     if (!(ref[0] >= lo[0] && ref[0] <= hi[0])) e[0] = `start %B must be between ${lo[0] * 100} and ${hi[0] * 100}`
@@ -141,6 +143,7 @@ function Wizard({ opts, folder, onPickFolder, onCreate, busy, err }) {
                   nrep >= 1 && nseed >= 2 && budget >= 1 && every >= 1, true, true]
   const canCreate = okStep.slice(0, 5).every(Boolean)
   const cst = cost(budget, nrep, every)
+  const sp = (opts?.spaces || []).find((s) => s.key === space)
   const sur = (opts?.surrogates || []).find((s) => s.key === kernel)
   const ao = (opts?.acquisitions || []).find((a) => a.key === acq)
   const gradient = [
@@ -150,7 +153,7 @@ function Wizard({ opts, folder, onPickFolder, onCreate, busy, err }) {
 
   const create = () => onCreate({
     parent_dir: folder, info, reference_method: ref, n_replicates: nrep, n_seed: nseed,
-    run_budget: budget, reference_every: every, kernel, acquisition: acq,
+    run_budget: budget, reference_every: every, kernel, acquisition: acq, space,
     acq_params: acqParams, acq_num_restarts: restarts, acq_raw_samples: raw,
   })
 
@@ -179,6 +182,7 @@ function Wizard({ opts, folder, onPickFolder, onCreate, busy, err }) {
               <dt>name</dt><dd>{info.name || '—'}</dd>
               <dt>check method</dt><dd>{(ref[0] * 100).toFixed(0)}→{(ref[1] * 100).toFixed(0)} %B, {ref[2]} min, {ref[3]} °C</dd>
               <dt>plan</dt><dd>{budget} methods × {nrep} · {nseed} seeds</dd>
+              <dt>space</dt><dd>{sp?.label || space}</dd>
               <dt>model</dt><dd>{sur?.label || kernel} · {ao?.short || acq}{acq === 'ucb' ? ` β ${acqParams.ucb_beta}` : ''}</dd>
             </dl>
           </div>
@@ -221,7 +225,7 @@ function Wizard({ opts, folder, onPickFolder, onCreate, busy, err }) {
                 <div>
                   <div className="row mb2">
                     <button className="sm" onClick={() => setRef(preset)}><Icon name="refresh" />shallow survey preset</button>
-                    <span className="muted small">10→30 %B over 50 min at 45 °C: 0.4 %B/min spreads most samples out, so retention and width shifts are obvious.</span>
+                    <span className="muted small">10→30 %B over 30 min at 45 °C: 0.67 %B/min spreads most samples out, so retention and width shifts are obvious, and it is never longer than anything the loop proposes.</span>
                   </div>
                   <div className="grid g2">
                     {[['start %B', 0, 0.5, 'start_phi'], ['end %B', 1, 0.5, 'end_phi'], ['duration', 2, 1, 'min'], ['temperature', 3, 1, '°C']].map(([label, i, stp, unit]) => (
@@ -276,12 +280,31 @@ function Wizard({ opts, folder, onPickFolder, onCreate, busy, err }) {
           {step === 4 && opts && (
             <div>
               <h3>The model that chooses the next method</h3>
-              <p className="muted">Two choices, made once and <Term k="locked">locked</Term> for the life of the campaign. The defaults are what the science was validated with; the alternatives are offered for campaigns with a clear brief that wants a different balance. Every choice is written to the campaign’s record and printed on the Method page.</p>
-              <h4 className="mt3"><Term k="surrogate">Surrogate</Term> — how smooth the response is assumed to be</h4>
+              <p className="muted">Three choices, made once and <Term k="locked">locked</Term> for the life of the campaign. The defaults are what the science was validated with; the alternatives are offered for campaigns with a clear brief that wants a different balance. Every choice is written to the campaign’s record and printed on the Method page.</p>
+              <h4 className="mt3"><Term k="design space">Design space</Term> — what a method is</h4>
+              <div className="choices" role="radiogroup" aria-label="design space">
+                {(opts.spaces || []).map((s) => (
+                  <Choice key={s.key} checked={space === s.key} onSelect={() => setSpace(s.key)} name={s.label}
+                          desc={s.what} meta={`${s.d} parameters · ${s.names.join(', ')}`}
+                          badge={s.recommended ? <Tag kind="rec">recommended</Tag> : null} />
+                ))}
+              </div>
+              {sp && (
+                <div className="detail mt3">
+                  <dl>
+                    <dt>choose it when</dt><dd>{sp.when}</dd>
+                    <dt>trade-off</dt><dd>{sp.tradeoff}</dd>
+                    <dt>constraints</dt><dd className="mono">{sp.constraints.join(' · ')}</dd>
+                  </dl>
+                  <p className="muted mt2 mb0">The instrument-check method stays a single ramp whatever space the campaign searches: it is a fixed method the instrument repeats, not a point the model sees.</p>
+                </div>
+              )}
+              <h4 className="mt6"><Term k="surrogate">Surrogate</Term> — how smooth the response is assumed to be</h4>
               <div className="choices" role="radiogroup" aria-label="surrogate kernel">
                 {opts.surrogates.map((s) => (
                   <Choice key={s.key} checked={kernel === s.key} onSelect={() => setKernel(s.key)} name={s.label}
-                          desc={s.what} meta={s.smoothness} badge={s.recommended ? <Tag kind="rec">recommended</Tag> : null} />
+                          desc={s.what} meta={s.smoothness}
+                          badge={<>{s.tag && <Tag title="compares gradient profiles, not timetable coordinates"><Term k="shape-aware">{s.tag}</Term></Tag>}{s.recommended && <Tag kind="rec">recommended</Tag>}</>} />
                 ))}
               </div>
               {sur && (
@@ -343,6 +366,7 @@ function Wizard({ opts, folder, onPickFolder, onCreate, busy, err }) {
                 <dt>instrument check</dt><dd>{(ref[0] * 100).toFixed(1)}→{(ref[1] * 100).toFixed(1)} %B over {ref[2]} min at {ref[3]} °C, every {every} methods</dd>
                 <dt>budget</dt><dd>{budget} methods × {nrep} repeats ≈ {cst.injections} injections, ≈ {cst.hours} h</dd>
                 <dt>cold start</dt><dd>{nseed} exploring methods</dd>
+                <dt>design space</dt><dd><b>{sp?.label}</b> — {sp?.d} parameters</dd>
                 <dt>surrogate</dt><dd><b>{sur?.label}</b> — {sur?.smoothness}</dd>
                 <dt>acquisition</dt><dd><b>{ao?.label}</b>{acq === 'ucb' ? ` with β = ${acqParams.ucb_beta}` : ''} · {restarts} restarts, {raw} raw samples</dd>
               </dl>

@@ -117,6 +117,7 @@ export default function Setup({ reload }) {
         <div className="card">
           <div className="cardhead"><h3>The model</h3><Tag><Icon name="lock" size={11} /><Term k="locked">locked at creation</Term></Tag></div>
           <div className="tiles">
+            <Tile label="design space" term="design space" value={o.space_label || 'Single ramp'} note={`${o.space_d || 4} parameters`} />
             <Tile label="surrogate" term="surrogate" value={o.kernel_label} note={o.kernel} />
             <Tile label="acquisition" term="acquisition function" value={o.acquisition_short} note={o.description} />
             <Tile label="cold start" term="cold start" value={o.n_seed} unit="methods" />

@@ -97,7 +97,8 @@ def test_norm_round_trip():
 
 @pytest.mark.parametrize("u,ok", [
     ([0.14, 0.62, 18.0, 48.0], True),      # method4-ish, reference preset A
-    ([0.10, 0.30, 50.0, 45.0], True),      # reference preset B
+    ([0.10, 0.30, 30.0, 45.0], True),      # reference preset B
+    ([0.10, 0.30, 50.0, 45.0], False),     # 50 min: longer than the box
     ([0.20, 0.20, 30.0, 40.0], True),      # isocratic is INSIDE the space
     ([0.30, 0.10, 20.0, 40.0], False),     # end below start
     ([0.50, 0.90, 20.0, 40.0], False),     # start above the box
@@ -364,7 +365,7 @@ def test_a_closed_campaign_is_reopened_not_extended():
 
 
 # ── the stopping rule, against a real campaign folder ───────────────────────
-REF_METHOD = [0.10, 0.30, 50.0, 45.0]
+REF_METHOD = [0.10, 0.30, 30.0, 45.0]
 
 
 def _campaign(tmp_path, monkeypatch, **kw):
@@ -906,7 +907,10 @@ def test_a_campaign_written_before_the_setting_reads_as_default(tmp_path, monkey
 
 def test_the_kernel_choice_is_validated_not_guessed():
     from gradient_bench.core import optimiser as O
-    assert set(O.KERNELS) == {"matern52", "matern32", "rbf", "default"}
+    assert set(O.KERNELS) == {"matern52", "matern32", "rbf",
+                              "wasserstein", "wasserstein_matern",
+                              "wasserstein_plus", "wasserstein_plus_matern",
+                              "default"}
     with pytest.raises(ValueError):
         O.make_covar_module(4, "matern")
     assert O.make_covar_module(4, "default") is None      # no torch needed
@@ -1616,7 +1620,7 @@ def test_a_campaign_records_and_locks_its_optimiser_choice(tmp_path, monkeypatch
     cfg = c.config()
     assert cfg["acquisition"] == "ucb"
     assert cfg["acquisition_note"] == "qUpperConfidenceBound (ucb_beta=3.5)"
-    assert cfg["app_version"] == "1.0.0"
+    assert cfg["app_version"] == "1.1.0"
     s = c.summary()["optimiser"]
     assert s["acquisition_short"] == "UCB" and s["kernel_label"].startswith("Mat")
     # the choice travels with duplicated settings
@@ -1640,3 +1644,383 @@ def test_a_legacy_campaign_reads_as_qlognei(tmp_path, monkeypatch):
     assert c.acquisition() == "qlognei"
     assert c.acq_params() == {}
     assert c.optimiser_summary()["acquisition_short"] == "qLogNEI"
+
+
+# ── version 3: the shape-aware kernels ──────────────────────────────────────
+from gradient_bench.core import shape as SHP                  # noqa: E402
+
+
+def _quad_w1(u1, u2):
+    """The area between two ramps by numerical quadrature - the definition,
+    not the closed form, so the two can disagree."""
+    from scipy.integrate import quad
+    f = lambda t: abs((u1[0] + (u1[1] - u1[0]) * t)      # noqa: E731
+                      - (u2[0] + (u2[1] - u2[0]) * t)) / SHP.PHI_MAX
+    return quad(f, 0.0, 1.0, points=[0.25, 0.5, 0.75], limit=200)[0]
+
+
+def test_the_ramp_distance_is_the_area_between_the_profiles():
+    """Closed form == quadrature == union-grid integration, crossing or not."""
+    U = S.initial_sample(12, seed=7)
+    D = SHP.ramp_w1(U, U)
+    assert D.shape == (12, 12)
+    assert np.allclose(D, D.T) and np.allclose(np.diag(D), 0.0)
+    for i in range(12):
+        for j in range(12):
+            assert D[i, j] == pytest.approx(_quad_w1(U[i], U[j]), abs=1e-6)
+            t1, v1 = SHP.ramp_nodes(U[i])
+            t2, v2 = SHP.ramp_nodes(U[j])
+            assert SHP.profile_w1(t1, v1, t2, v2) == pytest.approx(D[i, j], abs=1e-9)
+    # the worked example from the module note: 10->50 vs 20->40 cross at the
+    # midpoint and are 0.05 apart; 10->50 vs 30->70 do not cross and are 0.20
+    assert SHP.ramp_w1([0.1, 0.5, 20, 40], [0.2, 0.4, 20, 40])[0, 0] == pytest.approx(0.05)
+    assert SHP.ramp_w1([0.1, 0.5, 20, 40], [0.3, 0.7, 20, 40])[0, 0] == pytest.approx(0.20)
+    # and duration and temperature do not enter the profile distance at all
+    assert SHP.ramp_w1([0.1, 0.5, 10, 25], [0.1, 0.5, 60, 60])[0, 0] == 0.0
+    ex = SHP.explain_distance(S.RAMP4, [0.1, 0.5, 20, 40], [0.2, 0.4, 30, 50])
+    assert ex["d_w"] == pytest.approx(0.05)
+    assert ex["duration_gap_min"] == 10.0 and ex["temperature_gap_c"] == 10.0
+
+
+def test_the_ramp_distance_is_a_metric():
+    U = S.initial_sample(30, seed=3)
+    D = SHP.ramp_w1(U, U)
+    for i in range(30):
+        for j in range(30):
+            for k in range(30):
+                assert D[i, k] <= D[i, j] + D[j, k] + 1e-12
+
+
+def test_the_shape_kernel_is_a_valid_covariance():
+    """Symmetric, unit diagonal, positive definite, and exactly exp(-d_W/l)
+    times the RBF factor - on normalised inputs, which is what the GP sees."""
+    pytest.importorskip("botorch")
+    import torch
+    U = S.initial_sample(40, seed=5)
+    x = torch.as_tensor(S.to_norm(U), dtype=torch.double)
+    cm = O.make_covar_module(4, "wasserstein")
+    K = cm(x, x).to_dense().detach().numpy()
+    assert np.allclose(K, K.T) and np.allclose(np.diag(K), 1.0)
+    assert np.linalg.eigvalsh(K).min() > 1e-8
+    kw, kr = cm.kernels
+    Kw = kw(x, x).to_dense().detach().numpy()
+    assert np.allclose(Kw, np.exp(-SHP.ramp_w1(U, U) / float(kw.lengthscale)))
+    assert np.allclose(kw(x, x, diag=True).detach().numpy(), 1.0)
+    # the second factor reads duration and temperature only
+    assert kr.feature_names == ["duration_min", "T"] and int(kr.base_kernel.ard_num_dims) == 2
+    assert type(kr.base_kernel).__name__ == "RBFKernel"
+    # and the plus form gives the endpoints a lengthscale as well
+    cp = O.make_covar_module(4, "wasserstein_plus")
+    assert cp.kernels[1].feature_names == ["start_phi", "end_phi", "duration_min", "T"]
+    # the matern forms swap the second factor's family, nothing else
+    cm52 = O.make_covar_module(4, "wasserstein_plus_matern")
+    assert type(cm52.kernels[1].base_kernel).__name__ == "MaternKernel"
+    assert float(cm52.kernels[1].base_kernel.nu) == 2.5
+    # with run order modelled, the extra column becomes a feature
+    c5 = O.make_covar_module(5, "wasserstein")
+    assert c5.kernels[1].feature_names == ["duration_min", "T", "run_order"]
+
+
+def test_the_shape_kernel_keeps_botorchs_priors():
+    """l_W carries the same LogNormal family and the same constraint as an
+    RBF lengthscale, with D = 1 as the paper specifies; the RBF factor is
+    BoTorch's own module."""
+    pytest.importorskip("botorch")
+    cm = O.make_covar_module(4, "wasserstein")
+    kw, kr = cm.kernels
+    kr = kr.base_kernel
+    assert type(kw).__name__ == "WassersteinProfileKernel"
+    assert type(kw.lengthscale_prior).__name__ == "LogNormalPrior"
+    assert float(kw.lengthscale_prior.loc) == pytest.approx(np.sqrt(2) + np.log(1) / 2, abs=1e-6)
+    assert float(kw.lengthscale_prior.scale) == pytest.approx(np.sqrt(3), abs=1e-6)
+    assert float(kw.raw_lengthscale_constraint.lower_bound) == pytest.approx(0.025)
+    assert type(kr).__name__ == "RBFKernel"
+    assert float(kr.lengthscale_prior.loc) == pytest.approx(np.sqrt(2) + np.log(2) / 2, abs=1e-6)
+    assert not hasattr(cm, "outputscale")
+
+
+def test_the_shape_kernel_is_described_without_a_fit():
+    """The Method page and the history need the names from the key alone."""
+    assert O.lengthscale_names_for("wasserstein") == ["shape", "duration_min", "T"]
+    assert O.lengthscale_names_for("wasserstein_plus") == \
+        ["shape", "start_phi", "end_phi", "duration_min", "T"]
+    assert O.lengthscale_names_for("wasserstein", True)[-1] == "run_order"
+    assert O.lengthscale_names_for("matern52") == S.P4_NAMES
+    assert O.lengthscale_names_for("matern52", space=S.STEPS8) == list(S.STEPS8.names)
+    assert O.lengthscale_names_for("wasserstein_plus_matern", space=S.STEPS8) == \
+        ["shape", "start_phi", "end_phi", "duration_min", "T"]
+    assert O.shape_kernel_parts("wasserstein_plus_matern") == (True, "matern52")
+    assert O.shape_kernel_parts("wasserstein") == (False, "rbf")
+    assert "Wasserstein" in O.kernel_note("wasserstein")
+    assert "Wasserstein+" in O.kernel_note("wasserstein_plus")
+    assert "Matern" in O.kernel_note("matern52")
+    assert O.lengthscale_reading("shape", 0.5).startswith("active")
+    assert O.lengthscale_reading("shape", 0.02).startswith("at the floor")
+    assert O.lengthscale_reading("shape", 0.05).startswith("short")
+    assert O.lengthscale_reading("shape", 3.0).startswith("long")
+    for k in O.SHAPE_KERNELS:
+        assert O.surrogate_option(k)["tag"] == "shape-aware"
+        assert not O.surrogate_option(k)["recommended"]
+
+
+def test_the_shape_kernel_fits_and_proposes_a_runnable_method():
+    pytest.importorskip("botorch")
+    U = S.initial_sample(10, seed=11)
+    y = np.array([3, 5, 4, 6, 2, 7, 5, 3, 6, 4], float)
+    for k in O.SHAPE_KERNELS:
+        fit = O.fit_gp(U, y, sigma_crf=1.0, kernel=k)
+        assert fit.kernel == k and fit.d == 4
+        assert fit.lengthscale_names == O.lengthscale_names_for(k)
+        assert fit.lengthscales.shape == (len(fit.lengthscale_names),)
+        assert np.all(np.isfinite(fit.lengthscales))
+        tab = fit.lengthscale_table()
+        assert tab[0][0] == "shape" and tab[0][2]
+        mu, sd = O.posterior(fit, U)
+        assert mu.shape == (10,) and np.all(sd > 0)
+        sug = O.suggest_next(U, y, sigma_crf=1.0, seed=1, kernel=k,
+                             num_restarts=2, raw_samples=32)
+        assert S.check4(sug.u)[0] and np.isfinite(sug.acq_value)
+        d = O.describe_kernel(k, 4)
+        assert d["available"] and d["module"] == "ProductKernel"
+        assert d["lengthscale_names"] == O.lengthscale_names_for(k)
+        assert d["factors"][0]["is_shape"]
+
+
+def test_the_shape_lengthscale_reaches_the_history_and_the_model_page(tmp_path):
+    pytest.importorskip("botorch")
+    from gradient_bench.core import uncertainty as UNC
+    U = S.initial_sample(8, seed=2)
+    y = np.array([3, 5, 4, 6, 2, 7, 5, 3], float)
+    step = UNC.uncertainty_step(U, y, sigma_crf=1.0, kernel="wasserstein")
+    assert list(step.lengthscales) == ["shape", "duration_min", "T"]
+    root = str(tmp_path)
+    HIST.append(root, HIST.row_from_step(step, method="m08r1", kernel="wasserstein"))
+    rows, cols = HIST.read(root)
+    assert cols.index("ls_shape") < cols.index("ls_duration_min")
+    assert "ls_start_phi" not in cols
+    ard = HIST.ard_table(root)
+    assert ard[0]["name"] == "shape" and ard[0]["reading"]
+
+
+def test_a_campaign_can_be_created_with_a_shape_kernel(tmp_path, monkeypatch):
+    c = _campaign(tmp_path, monkeypatch, kernel="wasserstein_plus")
+    assert c.kernel() == "wasserstein_plus"
+    assert "Wasserstein+" in c.config()["kernel_note"]
+    assert c.summary()["optimiser"]["kernel_label"].startswith("Shape-aware")
+    from gradient_bench.store import campaign as C
+    d = C.duplicate_settings(c, str(tmp_path), {"name": "dup"})
+    assert d.kernel() == "wasserstein_plus"
+
+
+def test_the_method_page_describes_the_shape_kernel(tmp_path, monkeypatch):
+    pytest.importorskip("botorch")
+    from gradient_bench import setup_doc as SD
+    c = _campaign(tmp_path, monkeypatch, kernel="wasserstein")
+    doc = SD.build(c)
+    sec = next(s for s in doc["sections"] if s["key"] == "surrogate")
+    text = " ".join(str(r) for r in sec["rows"])
+    assert "WassersteinProfileKernel" in text and "factor 2: RBFKernel" in text
+    assert "shape" in text and not sec["warnings"]
+
+
+# ── version 3: the three-segment design space ───────────────────────────────
+def test_steps8_writes_the_timetable_in_deltas():
+    sp = S.STEPS8
+    assert sp.d == 8 and list(sp.names) == ["phi0", "dphi1", "dphi2", "dphi3",
+                                             "dt1", "dt2", "dt3", "T"]
+    u = [0.10, 0.00, 0.30, 0.20, 5.0, 10.0, 10.0, 40.0]
+    t, phi = sp.profile(u)
+    assert t.tolist() == [0.0, 5.0, 15.0, 25.0]
+    assert np.allclose(phi, [0.10, 0.10, 0.40, 0.60])
+    row = sp.to_abs(u)
+    assert (row["t1"], row["t2"], row["t3"]) == (5.0, 15.0, 25.0)
+    assert np.allclose([row["phi1"], row["phi2"], row["phi3"], row["phi4"]],
+                       [0.10, 0.10, 0.40, 0.60])
+    assert np.allclose(sp.from_abs(row), u)
+    tab = sp.gradient_table(u)
+    assert len(tab) == 4 and tab[1]["phase"] == "Node 1 (hold)"
+    assert tab[-1]["phase"] == "End of gradient" and tab[-1]["pct_b"] == 60.0
+    assert sp.summary(u) == {"start_phi": 0.10, "end_phi": pytest.approx(0.60),
+                             "duration_min": 25.0, "T": 40.0, "n_segments": 3}
+    assert sp.is_isocratic([0.1, 0, 0, 0, 5, 5, 5, 40])
+    # the row says which space it came from
+    assert S.space_for_row(row) is sp
+    assert S.space_for_row(S.RAMP4.to_abs([0.1, 0.5, 20, 40])) is S.RAMP4
+    assert S.for_vector(u) is sp and S.for_vector([0.1, 0.5, 20, 40]) is S.RAMP4
+
+
+def test_steps8_constraints_are_the_sums_and_normalise_correctly():
+    sp = S.STEPS8
+    assert sp.check([0.10, 0.20, 0.20, 0.20, 5, 5, 5, 40])[0]
+    ok, why = sp.check([0.10, 0.50, 0.50, 0.50, 5, 5, 5, 40])
+    assert not ok and "<= 1.0" in why
+    ok, why = sp.check([0.10, 0.20, 0.20, 0.20, 15, 15, 15, 40])
+    assert not ok and "dt1 + dt2 + dt3 <= 30" in why
+    ok, why = sp.check([0.10, 0.20, 0.20, 0.20, 0.2, 0.2, 0.2, 40])
+    assert not ok and ">= 1.0" in why
+    # no minimum segment length and no largest single step: a hold, an
+    # instantaneous jump and one big step are all inside the space
+    assert sp.check([0.10, 0.00, 0.80, 0.00, 10, 0, 10, 40])[0]
+    assert sp.check([0.02, 0.98, 0.00, 0.00, 0, 15, 15, 40])[0]
+    ok, why = sp.check([0.10, 0.20, -0.1, 0.20, 5, 5, 5, 40])
+    assert not ok and "dphi2" in why and "lower" in why
+    # every normalised triple agrees with its absolute constraint on random points
+    rng = np.random.default_rng(0)
+    U = sp.lower + rng.random((2000, 8)) * (sp.upper - sp.lower)
+    X = sp.to_norm(U)
+    for c, (idx, coef, rhs) in zip(sp.constraints, sp.normalised_constraints()):
+        slack_abs = c.slack(U)
+        slack_n = sum(k * X[:, i] for k, i in zip(coef, idx)) - rhs
+        assert np.allclose(slack_abs, slack_n)
+    assert 0.003 < sp.feasible_fraction(200000) < 0.05
+    seeds = sp.initial_sample(200, seed=3)
+    assert seeds.shape == (200, 8) and sp.mask(seeds).all()
+    # the window-relative sampler reaches shallow AND steep profiles
+    ends = seeds[:, 0] + seeds[:, 1:4].sum(1)
+    assert ends.min() < 0.3 and ends.max() > 0.9
+
+
+def test_the_profile_distance_knows_collinear_timetables_are_one_profile():
+    sp = S.STEPS8
+    a = [0.1, 0.1, 0.1, 0.1, 10, 10, 10, 40]          # a ramp written as 3 segments
+    b = [0.1, 0.05, 0.15, 0.1, 5, 15, 10, 40]         # same line, node slid
+    assert SHP.pairwise_w1(sp, [a], [b])[0, 0] == pytest.approx(0.0, abs=1e-12)
+    # and the same profile squeezed or stretched in time is also 0 apart: the
+    # duration is the second factor's job, not the profile's
+    c = [0.1, 0.1, 0.1, 0.1, 5, 5, 5, 40]
+    assert SHP.pairwise_w1(sp, [a], [c])[0, 0] == pytest.approx(0.0, abs=1e-12)
+    # a hold at the start moves the area
+    d = [0.1, 0.0, 0.2, 0.1, 10, 10, 10, 40]
+    assert SHP.pairwise_w1(sp, [a], [d])[0, 0] > 0.01
+    # a vertical step is integrated exactly: a jump from 0.1 to 0.5 at the
+    # midpoint against a flat 0.1 is an area of 0.4 * 0.5
+    step = [0.1, 0.0, 0.4, 0.0, 10, 0, 10, 40]
+    flat = [0.1, 0.0, 0.0, 0.0, 10, 5, 5, 40]
+    assert SHP.pairwise_w1(sp, [step], [flat])[0, 0] == pytest.approx(0.2)
+    # and against the same jump placed at t = 0.25 the area is 0.4 * 0.25
+    early = [0.1, 0.0, 0.4, 0.0, 5, 0, 15, 40]
+    assert SHP.pairwise_w1(sp, [step], [early])[0, 0] == pytest.approx(0.1)
+    # a 5-minute ramp up to the same level by t = 0.25 adds the triangle
+    ramp = [0.1, 0.4, 0.0, 0.0, 5, 5, 10, 40]
+    assert SHP.pairwise_w1(sp, [step], [ramp])[0, 0] == pytest.approx(0.15)
+    # the torch kernel agrees on the same vertical steps
+    pytest.importorskip("botorch")
+    import torch
+    U = np.array([step, flat, early, a, d], float)
+    kw = O.make_covar_module(8, "wasserstein", sp).kernels[0]
+    x = torch.as_tensor(sp.to_norm(U), dtype=torch.double)
+    Kw = kw(x, x).to_dense().detach().numpy()
+    assert np.allclose(Kw, np.exp(-SHP.pairwise_w1(sp, U, U) / float(kw.lengthscale)), atol=1e-8)
+
+
+def test_the_torch_profile_distance_matches_numpy_in_both_spaces():
+    pytest.importorskip("botorch")
+    import torch
+    for sp in (S.RAMP4, S.STEPS8):
+        U = sp.initial_sample(15, seed=8)
+        D = SHP.pairwise_w1(sp, U, U)
+        x = torch.as_tensor(sp.to_norm(U), dtype=torch.double)
+        for k in O.SHAPE_KERNELS:
+            cm = O.make_covar_module(sp.d, k, sp)
+            kw = cm.kernels[0]
+            Kw = kw(x, x).to_dense().detach().numpy()
+            assert np.allclose(Kw, np.exp(-D / float(kw.lengthscale)), atol=1e-8)
+            assert np.allclose(kw(x, x, diag=True).detach().numpy(), 1.0)
+            K = cm(x, x).to_dense().detach().numpy()
+            assert np.allclose(K, K.T) and np.linalg.eigvalsh(K).min() > 1e-8
+        # the endpoint features are what the space says they are
+        A, b = SHP.feature_map(sp, SHP.PLUS_FEATURES, sp.d)
+        f = sp.to_norm(U) @ A + b
+        feats = {n: (lo, hi) for n, _, lo, hi in sp.features()}
+        want = np.array([[(sp.summary(u)[n] - feats[n][0]) / (feats[n][1] - feats[n][0])
+                          for n in SHP.PLUS_FEATURES] for u in U])
+        assert np.allclose(f, want)
+
+
+def test_every_kernel_fits_and_proposes_in_the_steps8_space():
+    pytest.importorskip("botorch")
+    sp = S.STEPS8
+    U = sp.initial_sample(12, seed=21)
+    y = np.array([3, 5, 4, 6, 2, 7, 5, 3, 6, 4, 5, 2], float)
+    for k in ("matern52", "wasserstein", "wasserstein_plus_matern"):
+        fit = O.fit_gp(U, y, sigma_crf=1.0, kernel=k, space=sp)
+        assert fit.d == 8 and fit.space is sp
+        assert fit.lengthscale_names == O.lengthscale_names_for(k, space=sp)
+        assert np.all(np.isfinite(fit.lengthscales))
+        mu, sd = O.posterior(fit, U)
+        assert mu.shape == (12,)
+        sug = O.suggest_next(U, y, sigma_crf=1.0, seed=1, kernel=k, space=sp,
+                             num_restarts=2, raw_samples=32)
+        assert sug.u.size == 8 and sp.check(sug.u)[0], (k, sp.check(sug.u))
+        assert O.describe_kernel(k, 8, sp)["available"]
+    # run order as a ninth input still pins correctly
+    sug = O.suggest_next(U, y, sigma_crf=1.0, seed=1, kernel="wasserstein",
+                         space=sp, run_order=np.arange(1, 13),
+                         next_run_order=13, model_run_order=True,
+                         num_restarts=2, raw_samples=32)
+    assert sug.u.size == 8 and sp.check(sug.u)[0]
+    from gradient_bench.core import uncertainty as UNC
+    g = UNC.make_reference_grid(space=sp)
+    assert g.shape == (UNC.GRID_N, 8) and sp.mask(g).all()
+    step = UNC.uncertainty_step(U, y, sigma_crf=1.0, grid=g, kernel="wasserstein_matern",
+                                space=sp)
+    assert list(step.lengthscales) == ["shape", "duration_min", "T"]
+    panels = UNC.slice_posteriors(step and O.fit_gp(U, y, 1.0, kernel="matern52", space=sp),
+                                  U[int(np.argmax(y))], n=20)
+    assert [p.name for p in panels] == list(sp.names)
+
+
+def test_a_steps8_campaign_records_and_refits_in_its_own_space(tmp_path, monkeypatch):
+    from gradient_bench.store import campaign as C
+    from gradient_bench.store import sheet as SH
+    c = _campaign(tmp_path, monkeypatch, space="steps8", kernel="wasserstein_matern")
+    assert c.space() is S.STEPS8 and c.config()["space"] == "steps8"
+    assert "dt1 + dt2 + dt3 <= 30" in c.config()["constraint"]
+    assert c.summary()["optimiser"]["space_d"] == 8
+    # the reference is a ramp whatever the space searches
+    assert c.reference_method().size == 4
+    # design rows round-trip through the eight sheet columns
+    sp = S.STEPS8
+    seeds = sp.initial_sample(3, seed=5)
+    for i, u in enumerate(seeds, start=1):
+        SH.append_run(c.workbook, method_name=SH.run_name(i, 1), source=SH.SOURCE_DESIGN,
+                      replicate=1, params_abs=sp.to_abs(u),
+                      row={"CRF": 3.0 + i, "n_clean_peaks": 3 + i, "hump_time_fraction": 0.0},
+                      run_order=i + 1)
+    U, y, names, ro = c.training_set()
+    assert U.shape == (3, 8) and np.allclose(U, seeds)
+    m = c.methods()
+    assert m[0]["n_segments"] == 3 and m[0]["space"] == "steps8" and len(m[0]["u"]) == 8
+    assert m[0]["duration_min"] == pytest.approx(seeds[0, 4:7].sum())
+    g = c.grid()
+    assert g.shape[1] == 8 and sp.mask(g).all()
+    d = C.duplicate_settings(c, str(tmp_path), {"name": "dup"})
+    assert d.space() is S.STEPS8 and d.kernel() == "wasserstein_matern"
+    with pytest.raises(ValueError):
+        _campaign(tmp_path, monkeypatch, space="nodes12")
+    # an older folder with no `space` key reads as the ramp
+    cfg = c.config(); cfg.pop("space"); SH.write_config(c.workbook, cfg)
+    assert c.space() is S.RAMP4
+
+
+def test_a_ramp_campaign_grid_is_not_reused_by_a_steps8_one(tmp_path, monkeypatch):
+    c = _campaign(tmp_path, monkeypatch, space="steps8")
+    np.save(c.grid_path, S.RAMP4.initial_sample(10, seed=1))    # wrong width on disk
+    g = c.grid()
+    assert g.shape[1] == 8
+
+
+def test_the_method_page_describes_the_steps8_space(tmp_path, monkeypatch):
+    pytest.importorskip("botorch")
+    from gradient_bench import setup_doc as SD
+    c = _campaign(tmp_path, monkeypatch, space="steps8", kernel="wasserstein_plus_matern")
+    doc = SD.build(c)
+    space_sec = next(s for s in doc["sections"] if s["key"] == "space")
+    text = " ".join(str(r) for r in space_sec["rows"] + space_sec["tables"]
+                    + space_sec["math"])
+    assert "dphi1" in text and "dt1 + dt2 + dt3" in text
+    assert "window-relative" in text and "check8" in text
+    sur = next(s for s in doc["sections"] if s["key"] == "surrogate")
+    text = " ".join(str(r) for r in sur["rows"])
+    assert "MaternKernel" in text and "start_phi, end_phi, duration_min, T" in text
+    assert not sur["warnings"]

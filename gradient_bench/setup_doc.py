@@ -95,7 +95,8 @@ def _describe_constraint(con) -> str:
 
 
 def kernel_report(d: int, floor_z: float,
-                  kernel: str = "matern52") -> dict[str, Any]:
+                  kernel: str = "matern52",
+                  space: S.Space = S.RAMP4) -> dict[str, Any]:
     """What THIS CAMPAIGN'S kernel setting actually builds, read from BoTorch.
 
     It must be handed the campaign's kernel. Reporting BoTorch's default here
@@ -120,12 +121,53 @@ def kernel_report(d: int, floor_z: float,
 
     out["available"] = True
     try:
-        cov = O.make_covar_module(d, kernel)
+        cov = O.make_covar_module(d, kernel, space)
         if cov is None:
             out["rows"].append(_row(
                 "covariance module", "none passed",
                 "this campaign is set to `default`, so the installed BoTorch's "
                 "own default is used and recorded by version"))
+            return out
+        if hasattr(cov, "kernels"):
+            # The shape-aware kernels: a product of factors, each with its own
+            # lengthscale prior. One block of rows per factor.
+            from .core import shape as SHP
+            facs = SHP.shape_kernel_factors(cov, O.model_names(d == space.d + 1, space))
+            out["rows"].append(_row(
+                "covariance module", type(cov).__name__,
+                "the product of the factors below; two methods are close only "
+                "when every factor says so"))
+            for i, f in enumerate(facs, start=1):
+                what = (f"factor {i}: {f['module']}")
+                out["rows"] += [
+                    _row(what, f["form"],
+                         "over " + ", ".join(f["inputs"])
+                         + (" - the profile is drawn on a 0-1 time axis with "
+                            "%B as a fraction, and d_W is the area between "
+                            "the two ramps" if f["is_shape"] else "")),
+                    _row(f"factor {i}: lengthscales",
+                         ", ".join(f["lengthscale_names"]),
+                         ("one for the whole profile: how far apart two "
+                          "profiles must be (in area, at most 1) before the "
+                          "score changes" if f["is_shape"] else
+                          "one per input, so the model can find that the "
+                          "score changes faster along one than another")),
+                    _row(f"factor {i}: lengthscale prior",
+                         _describe_prior(f["prior"]),
+                         "BoTorch's dimension-scaled LogNormal, with D = 1 "
+                         "for the profile term as in the paper"
+                         if f["is_shape"] else
+                         "BoTorch's dimension-scaled LogNormal, read off the "
+                         "module BoTorch built"),
+                    _row(f"factor {i}: lengthscale constraint",
+                         _describe_constraint(f["constraint"]), ""),
+                ]
+            out["rows"].append(_row(
+                "outputscale",
+                ("present: " + type(cov).__name__) if hasattr(cov, "outputscale")
+                else "none",
+                "absent by design; an outputscale is partly degenerate with "
+                "the noise term"))
             return out
         base = getattr(cov, "base_kernel", cov)
         out["rows"] += [
@@ -244,32 +286,61 @@ def build(c: Campaign) -> dict[str, Any]:
     sections.append(s)
 
     # 3 ── the design space ─────────────────────────────────────────────
+    sp = c.space()
+    units = {"start_phi": "fraction B", "end_phi": "fraction B",
+             "duration_min": "minutes", "T": "degrees C", "phi0": "fraction B",
+             "dphi1": "fraction B (step)", "dphi2": "fraction B (step)",
+             "dphi3": "fraction B (step)", "dt1": "minutes (step)",
+             "dt2": "minutes (step)", "dt3": "minutes (step)"}
     s = _sec("space", "The design space",
-             "Four controllable parameters, a box, and one linear constraint.")
+             f"{sp.label}: {sp.d} controllable parameters, a box, and "
+             f"{len(sp.constraints)} linear constraint"
+             f"{'s' if len(sp.constraints) != 1 else ''}. " + sp.what)
+    s["rows"].append(_row("Space", f"{sp.label} ({sp.key})", term="design space",
+                          note="chosen at creation and locked, like the kernel: "
+                               "a campaign's runs are points in one space"))
     s["tables"].append({
         "title": "Parameters",
         "columns": ["parameter", "lower", "upper", "unit"],
-        "rows": [[n, float(lo), float(hi), u] for n, lo, hi, u in zip(
-            S.P4_NAMES, S.P4_LOWER, S.P4_UPPER,
-            ["fraction B", "fraction B", "minutes", "degrees C"])]})
-    s["math"] = [
-        f"absolute:    end_phi >= start_phi + {S.MIN_SPAN}",
-        f"normalised:  {S.CON_COEF[0]:+.2f} * end_n {S.CON_COEF[1]:+.2f} * "
-        f"start_n >= {S.CON_RHS:+.2f}"
-        f"   (indices {S.CON_IDX})",
-    ]
-    s["rows"] += [
-        _row("MIN_SPAN", S.MIN_SPAN,
-             "zero ON PURPOSE: end_phi == start_phi is isocratic, and isocratic "
-             "is a legitimate method that must stay inside the space"),
-        _row("Feasible fraction", 0.868421,
-             "the analytic share of the box the constraint admits. Stated "
-             "rather than sampled: a Monte Carlo estimate on every page load "
-             "would print a slightly different 'fact' each time"),
-        _row("Enforced at", "cold-start seeds, acquisition output, and recording",
-             "one gate, `space.check4`, called at all three - a method that "
-             "cannot be run cannot be proposed OR written down"),
-    ]
+        "rows": [[n, float(lo), float(hi), units.get(n, "")]
+                 for n, lo, hi in zip(sp.names, sp.lower, sp.upper)]})
+    s["math"] = []
+    for con, (idx, coef, rhs) in zip(sp.constraints, sp.normalised_constraints()):
+        s["math"].append(f"absolute:    {con.label}")
+        s["math"].append("normalised:  " + " ".join(
+            f"{k:+.2f}*{sp.names[i]}_n" for k, i in zip(coef, idx))
+            + f" >= {rhs:+.2f}")
+    if sp is S.RAMP4:
+        s["rows"].append(_row(
+            "MIN_SPAN", S.MIN_SPAN,
+            "zero ON PURPOSE: end_phi == start_phi is isocratic, and isocratic "
+            "is a legitimate method that must stay inside the space"))
+        s["rows"].append(_row(
+            "Feasible fraction", 0.868421,
+            "the analytic share of the box the constraint admits. Stated "
+            "rather than sampled: a Monte Carlo estimate on every page load "
+            "would print a slightly different 'fact' each time"))
+    else:
+        s["rows"].append(_row(
+            "Deltas, not nodes", "monotonic by the box",
+            "every composition step and every time step is >= 0, so the "
+            "profile cannot fall; a zero composition step is a hold and a "
+            "zero time step is an instantaneous jump. Only the sums are "
+            f"constrained, plus a {S.STEPS8_T_MIN} min floor on the total "
+            "duration because the profile is drawn on t / t_N"))
+        s["rows"].append(_row(
+            "Feasible fraction", f"{sp.feasible_fraction(100000, seed=0):.3f}",
+            "Monte Carlo over the box with a fixed seed: the share of the box "
+            "the sum constraints admit"))
+        s["rows"].append(_row(
+            "Cold-start sampler", "window-relative",
+            "endpoints first, interior nodes inside the window they define "
+            "(Boelrijk et al. 2026, Section 2.4), so shallow and bent "
+            "profiles are as reachable as diagonal ones"))
+    s["rows"].append(_row(
+        "Enforced at", "cold-start seeds, acquisition output, and recording",
+        f"one gate, `space.check{sp.d}`, called at all three - a method that "
+        "cannot be run cannot be proposed OR written down"))
     sections.append(s)
 
     # 4 ── replicates and the noise model ───────────────────────────────
@@ -328,7 +399,8 @@ def build(c: Campaign) -> dict[str, Any]:
     sections.append(s)
 
     # 5 ── the surrogate ────────────────────────────────────────────────
-    dim = O.model_dim(str(cfg.get("model_run_order", "false")).lower() == "true")
+    dim = O.model_dim(str(cfg.get("model_run_order", "false")).lower() == "true",
+                      c.space())
     floor_z = 1e-4
     if y.size > 1:
         floor_z = O.noise_floor_std(y, sd if np.isfinite(sd) and sd > 0
@@ -339,7 +411,7 @@ def build(c: Campaign) -> dict[str, Any]:
              "does not cost the hyperparameter priors - only a module built by "
              "hand would.")
     kern = c.kernel()
-    kd = O.describe_kernel(kern, dim)
+    kd = O.describe_kernel(kern, dim, c.space())
     ko = O.surrogate_option(kern)
     s["rows"] += [
         _row("Model", "botorch.models.SingleTaskGP", term="GP"),
@@ -356,6 +428,14 @@ def build(c: Campaign) -> dict[str, Any]:
               if kern == "matern32" else
               "BoTorch's own get_covar_module_with_dim_scaled_prior"
               if kern == "rbf" else
+              "shape.make_shape_kernel: a Wasserstein-1 profile kernel over "
+              "the gradient profile with BoTorch's D = 1 lengthscale prior, "
+              "times a " + ("Matern-5/2" if kern.endswith("_matern") else "RBF")
+              + " factor built by BoTorch's own constructor over "
+              + ("start, end, duration and temperature (Wasserstein+)"
+                 if kern.startswith("wasserstein_plus")
+                 else "duration and temperature")
+              if kern in O.SHAPE_KERNELS else
               "nothing - no covar_module is passed"),
              "the priors below are BoTorch's, not this app's: choosing the "
              "kernel does not cost the regularisation that stops a "
@@ -363,20 +443,24 @@ def build(c: Campaign) -> dict[str, Any]:
         _row("Built as", (kd.get("base") or kd.get("module") or "-")
              + (f", nu = {kd['nu']:.1f}" if np.isfinite(kd.get("nu", float("nan")))
                 else "")
-             + (f", ARD over {kd['ard_num_dims']} dims" if kd.get("ard_num_dims")
+             + (f", {kd['ard_num_dims']} lengthscales: "
+                + ", ".join(kd.get("lengthscale_names", []))
+                if kd.get("factors") else
+                f", ARD over {kd['ard_num_dims']} dims" if kd.get("ard_num_dims")
                 else ""),
              kd.get("error", "")),
         _row("Outcome transform", "Standardize(m=1)",
              "targets are divided by their unbiased sd, which is why the noise "
              "floor has to be converted"),
-        _row("Inputs", ", ".join(O.model_names(dim == 5)) + f"  (d = {dim})"),
+        _row("Inputs", ", ".join(O.model_names(dim == c.space().d + 1, c.space()))
+             + f"  (d = {dim})"),
         _row("Run order as a covariate",
-             "on" if dim == 5 else "off (default)",
+             "on" if dim == c.space().d + 1 else "off (default)",
              "it works, but earns no interface until a leave-one-out "
              "comparison on a recorded campaign says it should"),
         _row("Fitted with", "fit_gpytorch_mll (exact marginal log likelihood)"),
     ]
-    kr = kernel_report(dim, floor_z, kern)
+    kr = kernel_report(dim, floor_z, kern, c.space())
     s["rows"] += kr["rows"]
     s["warnings"] += kr["warnings"]
     sections.append(s)
@@ -405,8 +489,9 @@ def build(c: Campaign) -> dict[str, Any]:
         _row("Restarts", cfg.get("acq_num_restarts", 10)),
         _row("Raw samples", cfg.get("acq_raw_samples", 512)),
         _row("Constraint passed to the optimiser",
-             f"inequality triple: indices {S.CON_IDX}, coefficients "
-             f"[{S.CON_COEF[0]:+.2f}, {S.CON_COEF[1]:+.2f}], rhs {S.CON_RHS:+.2f}",
+             "; ".join(f"indices {idx}, coefficients "
+                       + "[" + ", ".join(f"{k:+.2f}" for k in coef) + f"], rhs {rhs:+.2f}"
+                       for idx, coef, rhs in c.space().normalised_constraints()),
              "the same constraint as above, in the normalised units "
              "optimize_acqf works in"),
         _row("Cold start", f"{c.n_seed()} spread-out methods before any model "

@@ -134,7 +134,7 @@ export default function Results({ st }) {
           <div className="grid g84">
             <Chromatogram data={best} manualHumps={[]} height={300} />
             <div className="stack">
-              <GradientTable rows={best.gradient} T={best.u?.[3]} />
+              <GradientTable rows={best.gradient} T={best.T ?? best.u?.[best.u.length - 1]} />
               <div className="tiles">
                 <Tile label="recorded CRF" value={f(best.recorded_crf, 3)} />
                 <Tile label="clean peaks" value={best.n_clean} note={`${best.n_shoulder} shoulder · ${best.n_on_hump} on-hump`} />
@@ -165,12 +165,12 @@ export default function Results({ st }) {
               <thead><tr>
                 {[['method', 'method'], ['crf_mean', 'CRF'], ['crf_sd', 'sd'], ['n', 'n'], ['crf_adjusted', 'adjusted'],
                   ['n_clean_peaks', 'clean'], ['hump_time_fraction', 'hump %'], ['start_phi', 'start %B'], ['end_phi', 'end %B'],
-                  ['duration_min', 'min'], ['T', '°C'], ['run_order', 'first run']].map(([k, label], i) => (
+                  ['duration_min', 'min'], ['n_segments', 'segments'], ['T', '°C'], ['run_order', 'first run']].map(([k, label], i) => (
                   <SortTh key={k} k={k} label={label} sort={sort} setSort={setSort} first={i === 0} />))}
                 <th className="l">flags</th>
               </tr></thead>
               <tbody>
-                {sorted.length === 0 && <tr><td className="l muted" colSpan={13}>No methods recorded yet.</td></tr>}
+                {sorted.length === 0 && <tr><td className="l muted" colSpan={14}>No methods recorded yet.</td></tr>}
                 {sorted.map((m) => (
                   <tr key={m.method} className={m.method === bestBase ? 'best' : ''}>
                     <td className="l mono">{m.method}</td>
@@ -178,7 +178,7 @@ export default function Results({ st }) {
                     <td>{m.crf_sd == null ? '—' : f(m.crf_sd, 3)}{m.tied ? <> <Tag><Term k="tied">tied</Term></Tag></> : ''}</td>
                     <td>{m.n}</td><td>{f(m.crf_adjusted, 3)}</td><td>{f(m.n_clean_peaks, 1)}</td>
                     <td>{pct(m.hump_time_fraction)}</td><td>{f(m.start_phi * 100, 1)}</td><td>{f(m.end_phi * 100, 1)}</td>
-                    <td>{f(m.duration_min, 1)}</td><td>{f(m.T, 1)}</td><td>{m.run_order}</td>
+                    <td>{f(m.duration_min, 1)}</td><td>{m.n_segments ?? 1}</td><td>{f(m.T, 1)}</td><td>{m.run_order}</td>
                     <td className="l">{m.deviates && <Tag><Term k="tuned">tuned</Term></Tag>}{' '}{m.manual_humps && <Tag>region drawn</Tag>}</td>
                   </tr>
                 ))}
@@ -188,7 +188,7 @@ export default function Results({ st }) {
             <table>
               <thead><tr>
                 <th className="l">method</th><th>rep</th><th>run</th><th>CRF</th><th>adjusted</th><th>clean</th><th>shoulder</th><th>on-hump</th>
-                <th>hump %</th><th>start %B</th><th>end %B</th><th>min</th><th>°C</th><th className="l">flags</th><th className="l">notes</th>
+                <th>hump %</th><th>start %B</th><th>end %B</th><th>min</th><th>segments</th><th>°C</th><th className="l">flags</th><th className="l">notes</th>
               </tr></thead>
               <tbody>
                 {d.rows.filter((r) => only === 'all' || r.source === only).length === 0 && (
@@ -197,8 +197,8 @@ export default function Results({ st }) {
                   <tr key={i} className={r.source === 'reference' ? 'ref' : ''}>
                     <td className="l mono">{r.method}</td><td>{r.replicate}</td><td>{r.run_order}</td><td><b>{f(r.CRF, 3)}</b></td>
                     <td>{f(r.CRF_adjusted, 3)}</td><td>{r.n_clean_peaks}</td><td>{r.n_shoulder_fronting}</td><td>{r.n_on_hump_peaks}</td>
-                    <td>{pct(r.hump_time_fraction)}</td><td>{f((r.phi1 ?? 0) * 100, 1)}</td><td>{f((r.phi2 ?? 0) * 100, 1)}</td>
-                    <td>{f(r.t1, 1)}</td><td>{f(r.T, 1)}</td>
+                    <td>{pct(r.hump_time_fraction)}</td><td>{f((r.start_phi ?? r.phi1 ?? 0) * 100, 1)}</td><td>{f((r.end_phi ?? r.phi2 ?? 0) * 100, 1)}</td>
+                    <td>{f(r.duration_min ?? r.t1, 1)}</td><td>{r.n_segments ?? 1}</td><td>{f(r.T, 1)}</td>
                     <td className="l">{r.picker_deviates ? <Tag>tuned</Tag> : ''}{' '}{r.manual_humps ? <Tag>region drawn</Tag> : ''}</td>
                     <td className="l" style={{ whiteSpace: 'normal', fontFamily: 'var(--f-ui)' }}>{r.notes || ''}</td>
                   </tr>
