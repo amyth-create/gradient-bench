@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.1 — the longest method is 30 min (2026-10-20)
+
+- **`duration_min` is bounded 10–30 min, not 10–60.** The shallow-survey reference preset
+  becomes 10→30 %B over 30 min at 45 °C, because a 50-min reference would fail the gate and
+  a reference should never be longer than anything the loop proposes; `verify_install`, the
+  tests and the wizard's fallback follow it. The golden-file and picker tests do not read the
+  box, so they are unchanged; five of the twenty bundled corpus methods are longer than
+  30 min and `replay_corpus` still fits on them as recorded. A campaign created under the
+  old box keeps its runs; a run longer than 30 min now sits outside the envelope the
+  acquisition searches, and the Method page prints the live bounds. The lower bound stays
+  at 10 min.
+
 ## 1.0.0 — first release (2026-09-09)
 
 Closed-loop HPLC gradient method development: the app proposes a gradient, you run it and

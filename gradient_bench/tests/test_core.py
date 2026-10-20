@@ -97,7 +97,8 @@ def test_norm_round_trip():
 
 @pytest.mark.parametrize("u,ok", [
     ([0.14, 0.62, 18.0, 48.0], True),      # method4-ish, reference preset A
-    ([0.10, 0.30, 50.0, 45.0], True),      # reference preset B
+    ([0.10, 0.30, 30.0, 45.0], True),      # reference preset B
+    ([0.10, 0.30, 50.0, 45.0], False),     # 50 min: longer than the box since 1.0.1
     ([0.20, 0.20, 30.0, 40.0], True),      # isocratic is INSIDE the space
     ([0.30, 0.10, 20.0, 40.0], False),     # end below start
     ([0.50, 0.90, 20.0, 40.0], False),     # start above the box
@@ -364,7 +365,7 @@ def test_a_closed_campaign_is_reopened_not_extended():
 
 
 # ── the stopping rule, against a real campaign folder ───────────────────────
-REF_METHOD = [0.10, 0.30, 50.0, 45.0]
+REF_METHOD = [0.10, 0.30, 30.0, 45.0]
 
 
 def _campaign(tmp_path, monkeypatch, **kw):
@@ -1616,7 +1617,8 @@ def test_a_campaign_records_and_locks_its_optimiser_choice(tmp_path, monkeypatch
     cfg = c.config()
     assert cfg["acquisition"] == "ucb"
     assert cfg["acquisition_note"] == "qUpperConfidenceBound (ucb_beta=3.5)"
-    assert cfg["app_version"] == "1.0.0"
+    from gradient_bench import APP_VERSION
+    assert cfg["app_version"] == APP_VERSION      # stamped, not pinned here
     s = c.summary()["optimiser"]
     assert s["acquisition_short"] == "UCB" and s["kernel_label"].startswith("Mat")
     # the choice travels with duplicated settings

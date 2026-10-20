@@ -43,7 +43,7 @@ import numpy as np
 
 P4_NAMES: list[str] = ["start_phi", "end_phi", "duration_min", "T"]
 P4_LOWER = np.array([0.02, 0.10, 10.0, 25.0])
-P4_UPPER = np.array([0.40, 1.00, 60.0, 60.0])
+P4_UPPER = np.array([0.40, 1.00, 30.0, 60.0])   # duration 60 -> 30 in 1.0.1
 
 #: end_phi >= start_phi + MIN_SPAN. Zero keeps isocratic inside the space.
 MIN_SPAN = 0.0
